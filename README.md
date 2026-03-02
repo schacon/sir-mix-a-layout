@@ -4,13 +4,22 @@ A lightweight macOS window manager utility with animated slot mode.
 
 ## What it does
 
-- `Shift + Cmd + P`: Toggle mode.
+- `Ctrl + Cmd + P`: Toggle mode.
 - Mode ON:
-  - All currently visible windows are moved into 200x200 slots in a vertical stack.
-  - Slot 1 starts at `x=50, y=50`, and each next slot is `250px` lower (`200 + 50 gap`).
-  - `Shift + Cmd + H/J/K/L/;` moves slot `1..5` to the active area.
-  - `Shift + Cmd + O` moves the current active window back into an empty slot.
-  - `Shift + Cmd + 1..9` swaps the active window with the chosen slot.
+  - Only the first 4 visible windows are managed; all others are ignored.
+  - Those 4 windows are assigned to fixed slot keys:
+    - `Ctrl + Cmd + B` -> slot 1
+    - `Ctrl + Cmd + N` -> slot 2
+    - `Ctrl + Cmd + M` -> slot 3
+    - `Ctrl + Cmd + ,` -> slot 4
+  - Pressing a slot key:
+    - If that slot is inactive, it brings that window to the active area.
+    - If that same slot is already active, it minimizes it back to its slot.
+    - If a different slot is active, it switches the active window to the new slot.
+  - Slots are `300x300`.
+  - Slot 1 starts `50px` from the top, and each next slot is `400px` lower (`300 + 100 gap`).
+  - Slot placement is top-right anchored, so windows that refuse to shrink overflow to the left.
+  - On enable, the app prints which window was assigned to each slot key.
 - Mode OFF:
   - All managed windows are restored to their original sizes/positions.
 

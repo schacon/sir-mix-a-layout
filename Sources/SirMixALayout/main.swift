@@ -3,14 +3,14 @@ import Carbon.HIToolbox
 import QuartzCore
 
 struct AppConfig {
-    static let activeOffset = CGPoint(x: 120, y: 120)
+    static let activeOffset = CGPoint(x: 500, y: 120)
     static let activeSize = CGSize(width: 1320, height: 860)
-    static let slotSize = CGSize(width: 200, height: 200)
+    static let slotSize = CGSize(width: 300, height: 300)
     static let slotStartX: CGFloat = 50
     static let slotStartY: CGFloat = 50
-    static let slotVerticalGap: CGFloat = 50
+    static let slotVerticalGap: CGFloat = 100
     static let animationDuration: CFTimeInterval = 0.22
-    static let maxSlots = 5
+    static let maxSlots = 4
 }
 
 struct KeyCombo {
@@ -129,6 +129,9 @@ final class AXWindowService {
             guard app.activationPolicy == .regular, !app.isTerminated else {
                 continue
             }
+            if app.bundleIdentifier == "com.apple.finder" {
+                continue
+            }
 
             let appElement = AXUIElementCreateApplication(app.processIdentifier)
             guard let appWindows = copyWindowListAttribute(appElement, attribute: kAXWindowsAttribute) else {
@@ -172,6 +175,15 @@ final class AXWindowService {
         return pid
     }
 
+    func title(of window: AXUIElement) -> String? {
+        copyAttribute(window, attribute: kAXTitleAttribute) as? String
+    }
+
+    func appName(of window: AXUIElement) -> String? {
+        let windowPID = pid(of: window)
+        return NSRunningApplication(processIdentifier: windowPID)?.localizedName
+    }
+
     @discardableResult
     func raise(_ window: AXUIElement) -> Bool {
         AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
@@ -207,6 +219,15 @@ final class AXWindowService {
         let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue)
         let sizeStatus = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
         return positionStatus == .success && sizeStatus == .success
+    }
+
+    @discardableResult
+    func setPosition(of window: AXUIElement, to point: CGPoint) -> Bool {
+        var origin = point
+        guard let positionValue = AXValueCreate(.cgPoint, &origin) else {
+            return false
+        }
+        return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success
     }
 
     @discardableResult
@@ -343,6 +364,11 @@ final class WindowAnimator {
 
 @MainActor
 final class LayoutController {
+    struct SlotAnchor {
+        let rightX: CGFloat
+        let y: CGFloat
+    }
+
     final class ManagedWindowState {
         let id: String
         let window: AXUIElement
@@ -365,9 +391,10 @@ final class LayoutController {
     private var modeEnabled = false
     private var managedWindows: [String: ManagedWindowState] = [:]
     private var slotWindowIDs: [String?] = []
+    private var activeSlotIndex: Int?
     private var activeWindowID: String?
 
-    private let shiftCmdModifier: UInt32 = UInt32(shiftKey | cmdKey)
+    private let ctrlCmdModifier: UInt32 = UInt32(controlKey | cmdKey)
     private let keybindings: [String]
 
     init() throws {
@@ -382,60 +409,34 @@ final class LayoutController {
 
     private static func buildKeybindingDescriptions() -> [String] {
         [
-            "Shift+Cmd+P: Toggle layout mode on/off",
-            "Shift+Cmd+O: Minimize active managed window into an empty slot",
-            "Shift+Cmd+H/J/K/L/;: Move slot 1..5 window to active area",
-            "Shift+Cmd+1..9: Swap active window with slot"
+            "Ctrl+Cmd+P: Toggle layout mode on/off",
+            "Ctrl+Cmd+B/N/M/, : Toggle slot 1..4 window between slot and active area",
+            "Ctrl+Cmd on a different slot switches active window"
         ]
     }
 
     private func registerHotkeys() throws {
         try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_P), modifiers: shiftCmdModifier)
+            KeyCombo(keyCode: UInt32(kVK_ANSI_P), modifiers: ctrlCmdModifier)
         ) { [weak self] in
             Task { @MainActor in
                 self?.toggleMode()
             }
         }
 
-        try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_O), modifiers: shiftCmdModifier)
-        ) { [weak self] in
-            Task { @MainActor in
-                self?.minimizeActiveToSlot()
-            }
-        }
-
         let slotActivationKeyCodes: [UInt32] = [
-            UInt32(kVK_ANSI_H),
-            UInt32(kVK_ANSI_J),
-            UInt32(kVK_ANSI_K),
-            UInt32(kVK_ANSI_L),
-            UInt32(kVK_ANSI_Semicolon)
+            UInt32(kVK_ANSI_B),
+            UInt32(kVK_ANSI_N),
+            UInt32(kVK_ANSI_M),
+            UInt32(kVK_ANSI_Comma)
         ]
 
         for (index, keyCode) in slotActivationKeyCodes.enumerated() {
             try hotkeys.register(
-                KeyCombo(keyCode: keyCode, modifiers: shiftCmdModifier)
+                KeyCombo(keyCode: keyCode, modifiers: ctrlCmdModifier)
             ) { [weak self] in
                 Task { @MainActor in
-                    self?.activateSlot(index)
-                }
-            }
-        }
-
-        let swapKeyCodes: [UInt32] = [
-            UInt32(kVK_ANSI_1), UInt32(kVK_ANSI_2), UInt32(kVK_ANSI_3),
-            UInt32(kVK_ANSI_4), UInt32(kVK_ANSI_5), UInt32(kVK_ANSI_6),
-            UInt32(kVK_ANSI_7), UInt32(kVK_ANSI_8), UInt32(kVK_ANSI_9)
-        ]
-
-        for (index, keyCode) in swapKeyCodes.enumerated() {
-            try hotkeys.register(
-                KeyCombo(keyCode: keyCode, modifiers: shiftCmdModifier)
-            ) { [weak self] in
-                Task { @MainActor in
-                    self?.swapActiveWithSlot(index)
+                    self?.toggleSlot(index)
                 }
             }
         }
@@ -477,11 +478,11 @@ final class LayoutController {
 
         modeEnabled = true
         managedWindows.removeAll()
+        activeSlotIndex = nil
         activeWindowID = nil
-        slotWindowIDs = Array(repeating: nil, count: windows.count)
-        let slotFrames = currentSlotFrames()
+        slotWindowIDs = Array(repeating: nil, count: AppConfig.maxSlots)
 
-        for (index, item) in windows.enumerated() {
+        for (index, item) in windows.prefix(AppConfig.maxSlots).enumerated() {
             let state = ManagedWindowState(
                 id: item.id,
                 window: item.window,
@@ -491,10 +492,11 @@ final class LayoutController {
             )
             managedWindows[item.id] = state
             slotWindowIDs[index] = item.id
-            animateWindow(item.window, to: slotFrames[index])
+            animateToSlot(item.window, slotIndex: index)
         }
 
-        print("Layout mode ON (\(windows.count) windows slotted).")
+        print("Layout mode ON (\(min(windows.count, AppConfig.maxSlots)) windows assigned).")
+        print(slotAssignmentsText())
     }
 
     private func exitMode() {
@@ -504,6 +506,7 @@ final class LayoutController {
 
         let restoring = Array(managedWindows.values)
         modeEnabled = false
+        activeSlotIndex = nil
         activeWindowID = nil
         managedWindows.removeAll()
         slotWindowIDs.removeAll()
@@ -523,7 +526,7 @@ final class LayoutController {
         print("Layout mode OFF (windows restored).")
     }
 
-    private func activateSlot(_ index: Int) {
+    private func toggleSlot(_ index: Int) {
         guard modeEnabled,
               index >= 0,
               index < slotWindowIDs.count,
@@ -532,62 +535,28 @@ final class LayoutController {
             return
         }
 
-        slotWindowIDs[index] = nil
+        if activeSlotIndex == index {
+            activeSlotIndex = nil
+            activeWindowID = nil
+            incomingState.slotIndex = index
+            animateToSlot(incomingState.window, slotIndex: index)
+            return
+        }
 
-        if let currentActiveID = activeWindowID,
-           currentActiveID != incomingID,
-           let currentActiveState = managedWindows[currentActiveID] {
-            if let emptySlot = firstEmptySlotIndex() {
-                slotWindowIDs[emptySlot] = currentActiveID
-                currentActiveState.slotIndex = emptySlot
-                let slotFrames = currentSlotFrames()
-                animateWindow(currentActiveState.window, to: slotFrames[emptySlot])
-            }
+        if let previousIndex = activeSlotIndex,
+           previousIndex >= 0,
+           previousIndex < slotWindowIDs.count,
+           let previousID = slotWindowIDs[previousIndex],
+           let previousState = managedWindows[previousID] {
+            previousState.slotIndex = previousIndex
+            animateToSlot(previousState.window, slotIndex: previousIndex)
         }
 
         incomingState.slotIndex = nil
+        activeSlotIndex = index
         activeWindowID = incomingID
         bringWindowForward(incomingState.window)
-        animateWindow(incomingState.window, to: activeFrame())
-    }
-
-    private func minimizeActiveToSlot() {
-        guard modeEnabled,
-              let activeWindowID,
-              let activeState = managedWindows[activeWindowID],
-              let emptySlot = firstEmptySlotIndex() else {
-            return
-        }
-
-        slotWindowIDs[emptySlot] = activeWindowID
-        activeState.slotIndex = emptySlot
-        self.activeWindowID = nil
-
-        let slotFrames = currentSlotFrames()
-        animateWindow(activeState.window, to: slotFrames[emptySlot])
-    }
-
-    private func swapActiveWithSlot(_ index: Int) {
-        guard modeEnabled,
-              index >= 0,
-              index < slotWindowIDs.count,
-              let currentActiveID = activeWindowID,
-              let currentActive = managedWindows[currentActiveID],
-              let slotID = slotWindowIDs[index],
-              slotID != currentActiveID,
-              let slotState = managedWindows[slotID] else {
-            return
-        }
-
-        slotWindowIDs[index] = currentActiveID
-        currentActive.slotIndex = index
-        activeWindowID = slotID
-        slotState.slotIndex = nil
-
-        let slotFrames = currentSlotFrames()
-        animateWindow(currentActive.window, to: slotFrames[index])
-        bringWindowForward(slotState.window)
-        animateWindow(slotState.window, to: activeFrame())
+        animateSlotToActive(incomingState.window)
     }
 
     private func bringWindowForward(_ window: AXUIElement) {
@@ -599,13 +568,49 @@ final class LayoutController {
         _ = ax.raise(window)
     }
 
-    private func firstEmptySlotIndex() -> Int? {
-        slotWindowIDs.firstIndex(where: { $0 == nil })
+    private func slotAssignmentsText() -> String {
+        var lines: [String] = []
+        for index in 0..<AppConfig.maxSlots {
+            let shortcut = slotShortcutLabel(for: index)
+            if index < slotWindowIDs.count,
+               let windowID = slotWindowIDs[index],
+               let state = managedWindows[windowID] {
+                lines.append("  \(shortcut): \(windowLabel(for: state.window))")
+            } else {
+                lines.append("  \(shortcut): (empty)")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
-    private func animateWindow(_ window: AXUIElement, to target: CGRect) {
+    private func slotShortcutLabel(for index: Int) -> String {
+        switch index {
+        case 0:
+            return "Ctrl+Cmd+B"
+        case 1:
+            return "Ctrl+Cmd+N"
+        case 2:
+            return "Ctrl+Cmd+M"
+        case 3:
+            return "Ctrl+Cmd+,"
+        default:
+            return "Ctrl+Cmd+?"
+        }
+    }
+
+    private func windowLabel(for window: AXUIElement) -> String {
+        let appName = ax.appName(of: window) ?? "Unknown App"
+        let title = ax.title(of: window)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let title, !title.isEmpty {
+            return "\(appName) - \(title)"
+        }
+        return appName
+    }
+
+    private func animateWindow(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = AppConfig.animationDuration, completion: (() -> Void)? = nil) {
         guard let start = ax.frame(of: window) else {
             _ = ax.setFrame(of: window, to: target)
+            completion?()
             return
         }
 
@@ -613,15 +618,84 @@ final class LayoutController {
             window: window,
             from: start,
             to: target,
-            duration: AppConfig.animationDuration,
+            duration: duration,
             apply: { [ax] window, rect in
                 _ = ax.setFrame(of: window, to: rect)
-            }
+            },
+            completion: completion
         )
     }
 
-    private func currentSlotFrames() -> [CGRect] {
-        slotFrames(count: slotWindowIDs.count, in: workspaceFrame())
+    private func animateSlotToActive(_ window: AXUIElement) {
+        let target = activeFrame()
+        guard let start = ax.frame(of: window) else {
+            _ = ax.setFrame(of: window, to: target)
+            return
+        }
+
+        let phase = max(0.08, AppConfig.animationDuration / 2.0)
+        let expandFrame = CGRect(
+            x: start.origin.x,
+            y: target.origin.y,
+            width: target.width,
+            height: target.height
+        )
+
+        animateWindow(window, to: expandFrame, duration: phase) { [weak self] in
+            guard let self else { return }
+            let slideFrame = CGRect(
+                x: target.origin.x,
+                y: target.origin.y,
+                width: target.width,
+                height: target.height
+            )
+            self.animateWindow(window, to: slideFrame, duration: phase)
+        }
+    }
+
+    private func animateToSlot(_ window: AXUIElement, slotIndex: Int) {
+        let screenFrame = workspaceFrame()
+        let slotRect = slotFrame(for: slotIndex, in: screenFrame)
+        let anchor = slotAnchor(for: slotIndex, in: screenFrame)
+
+        guard let start = ax.frame(of: window) else {
+            _ = ax.setFrame(of: window, to: slotRect)
+            alignWindow(window, to: anchor)
+            return
+        }
+
+        let phase = max(0.08, AppConfig.animationDuration / 2.0)
+        let slideFrame = CGRect(
+            x: slotRect.origin.x,
+            y: start.origin.y,
+            width: start.width,
+            height: start.height
+        )
+
+        animateWindow(window, to: slideFrame, duration: phase) { [weak self] in
+            guard let self else { return }
+            let shrinkFrame = CGRect(
+                x: slideFrame.origin.x,
+                y: slideFrame.origin.y,
+                width: slotRect.width,
+                height: slotRect.height
+            )
+            self.animateWindow(window, to: shrinkFrame, duration: phase) { [weak self] in
+                guard let self else { return }
+                self.alignWindow(window, to: anchor)
+            }
+        }
+    }
+
+    private func alignWindow(_ window: AXUIElement, to anchor: SlotAnchor) {
+        guard let actual = ax.frame(of: window) else {
+            return
+        }
+        let adjustedOrigin = CGPoint(
+            x: anchor.rightX - actual.width,
+            y: anchor.y
+        )
+        _ = ax.setPosition(of: window, to: adjustedOrigin)
     }
 
     private func activeFrame() -> CGRect {
@@ -635,28 +709,20 @@ final class LayoutController {
         return clamp(rect: proposed, to: screenFrame)
     }
 
-    private func slotFrames(count: Int, in screenFrame: CGRect) -> [CGRect] {
-        guard count > 0 else {
-            return []
-        }
+    private func slotFrame(for index: Int, in screenFrame: CGRect) -> CGRect {
+        let anchor = slotAnchor(for: index, in: screenFrame)
+        return CGRect(
+            x: anchor.rightX - AppConfig.slotSize.width,
+            y: anchor.y,
+            width: AppConfig.slotSize.width,
+            height: AppConfig.slotSize.height
+        )
+    }
 
-        let slotWidth = AppConfig.slotSize.width
-        let slotHeight = AppConfig.slotSize.height
-        let gap = AppConfig.slotVerticalGap
-        let x = screenFrame.minX + AppConfig.slotStartX
-        var frames: [CGRect] = []
-        frames.reserveCapacity(count)
-
-        for index in 0..<count {
-            let y = screenFrame.minY + AppConfig.slotStartY + (CGFloat(index) * (slotHeight + gap))
-            let frame = clamp(
-                rect: CGRect(x: x, y: y, width: slotWidth, height: slotHeight),
-                to: screenFrame
-            )
-            frames.append(frame)
-        }
-
-        return frames
+    private func slotAnchor(for index: Int, in screenFrame: CGRect) -> SlotAnchor {
+        let rightX = screenFrame.minX + AppConfig.slotStartX + AppConfig.slotSize.width
+        let y = screenFrame.minY + AppConfig.slotStartY + (CGFloat(index) * (AppConfig.slotSize.height + AppConfig.slotVerticalGap))
+        return SlotAnchor(rightX: rightX, y: y)
     }
 
     private func workspaceFrame() -> CGRect {
