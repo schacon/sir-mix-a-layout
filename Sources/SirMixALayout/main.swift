@@ -3,13 +3,13 @@ import Carbon.HIToolbox
 import QuartzCore
 
 struct AppConfig {
-    static let targetOffset = CGPoint(x: 120, y: 80)
-    static let targetSize = CGSize(width: 1320, height: 860)
+    static let activeOffset = CGPoint(x: 120, y: 120)
+    static let activeSize = CGSize(width: 1320, height: 860)
+    static let slotSize = CGSize(width: 200, height: 200)
+    static let slotGap: CGFloat = 20
+    static let slotMargin: CGFloat = 40
     static let animationDuration: CFTimeInterval = 0.22
-    static let slideDistance: CGFloat = 240
-    static let activationDelay: TimeInterval = 0.14
-
-    static let hotkeyModifiers: UInt32 = UInt32(controlKey | optionKey | cmdKey)
+    static let maxSlots = 9
 }
 
 struct KeyCombo {
@@ -120,48 +120,60 @@ final class AXWindowService {
         copyElementAttribute(systemWide, attribute: kAXFocusedWindowAttribute)
     }
 
-    func focusedAppPID() -> pid_t? {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier
-    }
+    func visibleWindows(limit: Int) -> [AXUIElement] {
+        var windows: [AXUIElement] = []
+        var seen = Set<String>()
 
-    func firstWindow(for pid: pid_t) -> AXUIElement? {
-        let appElement = AXUIElementCreateApplication(pid)
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular, !app.isTerminated else {
+                continue
+            }
 
-        if let focused = copyElementAttribute(appElement, attribute: kAXFocusedWindowAttribute),
-           isMinimized(focused) == false {
-            return focused
-        }
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            guard let appWindows = copyWindowListAttribute(appElement, attribute: kAXWindowsAttribute) else {
+                continue
+            }
 
-        guard let windows = copyWindowListAttribute(appElement, attribute: kAXWindowsAttribute) else {
-            return nil
-        }
+            for window in appWindows {
+                guard isMinimized(window) == false,
+                      let frame = frame(of: window),
+                      frame.width > 80,
+                      frame.height > 80,
+                      intersectsAnyVisibleScreen(frame) else {
+                    continue
+                }
 
-        for window in windows where isMinimized(window) == false {
-            return window
-        }
+                let id = windowID(of: window)
+                if seen.insert(id).inserted {
+                    windows.append(window)
+                }
 
-        return windows.first
-    }
-
-    func nextAppPID(after currentPID: pid_t) -> pid_t? {
-        let ordered = visibleAppOrder()
-        if let index = ordered.firstIndex(of: currentPID) {
-            for pid in ordered[(index + 1)...] where isSwitchableApp(pid: pid) {
-                return pid
+                if windows.count >= limit {
+                    return windows
+                }
             }
         }
 
-        for pid in ordered where pid != currentPID && isSwitchableApp(pid: pid) {
-            return pid
-        }
+        return windows
+    }
 
-        for app in NSWorkspace.shared.runningApplications where app.processIdentifier != currentPID {
-            if app.activationPolicy == .regular && !app.isTerminated {
-                return app.processIdentifier
-            }
+    func windowID(of window: AXUIElement) -> String {
+        let pid = pid(of: window)
+        if let windowNumber = copyIntAttribute(window, attribute: "AXWindowNumber") {
+            return "\(pid):\(windowNumber)"
         }
+        return "\(pid):\(ObjectIdentifier(window).hashValue)"
+    }
 
-        return nil
+    func pid(of window: AXUIElement) -> pid_t {
+        var pid: pid_t = 0
+        AXUIElementGetPid(window, &pid)
+        return pid
+    }
+
+    @discardableResult
+    func raise(_ window: AXUIElement) -> Bool {
+        AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
     }
 
     func frame(of window: AXUIElement) -> CGRect? {
@@ -206,34 +218,11 @@ final class AXWindowService {
         copyBoolAttribute(window, attribute: kAXMinimizedAttribute)
     }
 
-    private func isSwitchableApp(pid: pid_t) -> Bool {
-        guard pid != ProcessInfo.processInfo.processIdentifier,
-              let app = NSRunningApplication(processIdentifier: pid) else {
-            return false
+    private func intersectsAnyVisibleScreen(_ frame: CGRect) -> Bool {
+        for screen in NSScreen.screens where screen.visibleFrame.intersects(frame) {
+            return true
         }
-
-        return app.activationPolicy == .regular && !app.isTerminated
-    }
-
-    private func visibleAppOrder() -> [pid_t] {
-        guard let windowInfo = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
-
-        var seen = Set<pid_t>()
-        var ordered: [pid_t] = []
-
-        for info in windowInfo {
-            guard let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber else {
-                continue
-            }
-            let pid = pid_t(pidNumber.int32Value)
-            if seen.insert(pid).inserted {
-                ordered.append(pid)
-            }
-        }
-
-        return ordered
+        return false
     }
 
     private func copyAttribute(_ element: AXUIElement, attribute: String) -> CFTypeRef? {
@@ -292,6 +281,18 @@ final class AXWindowService {
 
         return nil
     }
+
+    private func copyIntAttribute(_ element: AXUIElement, attribute: String) -> Int? {
+        guard let value = copyAttribute(element, attribute: attribute) else {
+            return nil
+        }
+
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+
+        return nil
+    }
 }
 
 final class WindowAnimator {
@@ -341,48 +342,258 @@ final class WindowAnimator {
 
 @MainActor
 final class LayoutController {
+    final class ManagedWindowState {
+        let id: String
+        let window: AXUIElement
+        let originalFrame: CGRect
+        let originalMinimized: Bool
+        var slotIndex: Int?
+
+        init(id: String, window: AXUIElement, originalFrame: CGRect, originalMinimized: Bool, slotIndex: Int?) {
+            self.id = id
+            self.window = window
+            self.originalFrame = originalFrame
+            self.originalMinimized = originalMinimized
+            self.slotIndex = slotIndex
+        }
+    }
+
     private let hotkeys: HotkeyManager
     private let ax = AXWindowService()
     private let animator = WindowAnimator()
+    private var modeEnabled = false
+    private var managedWindows: [String: ManagedWindowState] = [:]
+    private var slotWindowIDs: [String?] = []
+    private var activeWindowID: String?
+
+    private let cmdModifier: UInt32 = UInt32(cmdKey)
+    private let shiftCmdModifier: UInt32 = UInt32(shiftKey | cmdKey)
+    private let keybindings: [String]
 
     init() throws {
         hotkeys = try HotkeyManager()
+        keybindings = LayoutController.buildKeybindingDescriptions()
         try registerHotkeys()
+    }
+
+    func startupKeybindingsText() -> String {
+        keybindings.joined(separator: "\n")
+    }
+
+    private static func buildKeybindingDescriptions() -> [String] {
+        [
+            "Shift+Cmd+P: Toggle layout mode on/off",
+            "Shift+Cmd+O: Minimize active managed window into an empty slot",
+            "Cmd+1..9: Move slotted window to active area",
+            "Shift+Cmd+1..9: Swap active window with slot"
+        ]
     }
 
     private func registerHotkeys() throws {
         try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_W), modifiers: AppConfig.hotkeyModifiers)
+            KeyCombo(keyCode: UInt32(kVK_ANSI_P), modifiers: shiftCmdModifier)
         ) { [weak self] in
             Task { @MainActor in
-                self?.moveFocusedWindowToPreset()
+                self?.toggleMode()
             }
         }
 
         try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_M), modifiers: AppConfig.hotkeyModifiers)
+            KeyCombo(keyCode: UInt32(kVK_ANSI_O), modifiers: shiftCmdModifier)
         ) { [weak self] in
             Task { @MainActor in
-                self?.minimizeFocusedWindowAnimated()
+                self?.minimizeActiveToSlot()
             }
         }
 
-        try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_Tab), modifiers: AppConfig.hotkeyModifiers)
-        ) { [weak self] in
-            Task { @MainActor in
-                self?.switchFocusedApp()
+        let numberKeyCodes: [UInt32] = [
+            UInt32(kVK_ANSI_1), UInt32(kVK_ANSI_2), UInt32(kVK_ANSI_3),
+            UInt32(kVK_ANSI_4), UInt32(kVK_ANSI_5), UInt32(kVK_ANSI_6),
+            UInt32(kVK_ANSI_7), UInt32(kVK_ANSI_8), UInt32(kVK_ANSI_9)
+        ]
+
+        for (index, keyCode) in numberKeyCodes.enumerated() {
+            try hotkeys.register(
+                KeyCombo(keyCode: keyCode, modifiers: cmdModifier)
+            ) { [weak self] in
+                Task { @MainActor in
+                    self?.activateSlot(index)
+                }
+            }
+
+            try hotkeys.register(
+                KeyCombo(keyCode: keyCode, modifiers: shiftCmdModifier)
+            ) { [weak self] in
+                Task { @MainActor in
+                    self?.swapActiveWithSlot(index)
+                }
             }
         }
     }
 
-    private func moveFocusedWindowToPreset() {
-        guard let window = ax.focusedWindow() else {
+    private func toggleMode() {
+        if modeEnabled {
+            exitMode()
+        } else {
+            enterMode()
+        }
+    }
+
+    private func enterMode() {
+        guard !modeEnabled else {
             return
         }
 
-        let target = targetFrame(for: ax.frame(of: window))
+        let discovered = ax.visibleWindows(limit: AppConfig.maxSlots)
+        var windows: [(window: AXUIElement, frame: CGRect, minimized: Bool, id: String)] = []
+        var seen = Set<String>()
 
+        for window in discovered {
+            guard let frame = ax.frame(of: window) else {
+                continue
+            }
+
+            let id = ax.windowID(of: window)
+            if seen.insert(id).inserted {
+                let minimized = ax.isMinimized(window) ?? false
+                windows.append((window, frame, minimized, id))
+            }
+        }
+
+        guard !windows.isEmpty else {
+            print("No visible windows were found to slot.")
+            return
+        }
+
+        modeEnabled = true
+        managedWindows.removeAll()
+        activeWindowID = nil
+        slotWindowIDs = Array(repeating: nil, count: windows.count)
+        let slotFrames = currentSlotFrames()
+
+        for (index, item) in windows.enumerated() {
+            let state = ManagedWindowState(
+                id: item.id,
+                window: item.window,
+                originalFrame: item.frame,
+                originalMinimized: item.minimized,
+                slotIndex: index
+            )
+            managedWindows[item.id] = state
+            slotWindowIDs[index] = item.id
+            animateWindow(item.window, to: slotFrames[index])
+        }
+
+        print("Layout mode ON (\(windows.count) windows slotted).")
+    }
+
+    private func exitMode() {
+        guard modeEnabled else {
+            return
+        }
+
+        let restoring = Array(managedWindows.values)
+        modeEnabled = false
+        activeWindowID = nil
+        managedWindows.removeAll()
+        slotWindowIDs.removeAll()
+
+        for state in restoring {
+            _ = ax.setMinimized(state.window, false)
+            animateWindow(state.window, to: state.originalFrame)
+        }
+
+        Task { @MainActor [ax] in
+            try? await Task.sleep(nanoseconds: UInt64((AppConfig.animationDuration + 0.05) * 1_000_000_000))
+            for state in restoring where state.originalMinimized {
+                _ = ax.setMinimized(state.window, true)
+            }
+        }
+
+        print("Layout mode OFF (windows restored).")
+    }
+
+    private func activateSlot(_ index: Int) {
+        guard modeEnabled,
+              index >= 0,
+              index < slotWindowIDs.count,
+              let incomingID = slotWindowIDs[index],
+              let incomingState = managedWindows[incomingID] else {
+            return
+        }
+
+        slotWindowIDs[index] = nil
+
+        if let currentActiveID = activeWindowID,
+           currentActiveID != incomingID,
+           let currentActiveState = managedWindows[currentActiveID] {
+            if let emptySlot = firstEmptySlotIndex() {
+                slotWindowIDs[emptySlot] = currentActiveID
+                currentActiveState.slotIndex = emptySlot
+                let slotFrames = currentSlotFrames()
+                animateWindow(currentActiveState.window, to: slotFrames[emptySlot])
+            }
+        }
+
+        incomingState.slotIndex = nil
+        activeWindowID = incomingID
+        bringWindowForward(incomingState.window)
+        animateWindow(incomingState.window, to: activeFrame())
+    }
+
+    private func minimizeActiveToSlot() {
+        guard modeEnabled,
+              let activeWindowID,
+              let activeState = managedWindows[activeWindowID],
+              let emptySlot = firstEmptySlotIndex() else {
+            return
+        }
+
+        slotWindowIDs[emptySlot] = activeWindowID
+        activeState.slotIndex = emptySlot
+        self.activeWindowID = nil
+
+        let slotFrames = currentSlotFrames()
+        animateWindow(activeState.window, to: slotFrames[emptySlot])
+    }
+
+    private func swapActiveWithSlot(_ index: Int) {
+        guard modeEnabled,
+              index >= 0,
+              index < slotWindowIDs.count,
+              let currentActiveID = activeWindowID,
+              let currentActive = managedWindows[currentActiveID],
+              let slotID = slotWindowIDs[index],
+              slotID != currentActiveID,
+              let slotState = managedWindows[slotID] else {
+            return
+        }
+
+        slotWindowIDs[index] = currentActiveID
+        currentActive.slotIndex = index
+        activeWindowID = slotID
+        slotState.slotIndex = nil
+
+        let slotFrames = currentSlotFrames()
+        animateWindow(currentActive.window, to: slotFrames[index])
+        bringWindowForward(slotState.window)
+        animateWindow(slotState.window, to: activeFrame())
+    }
+
+    private func bringWindowForward(_ window: AXUIElement) {
+        _ = ax.setMinimized(window, false)
+        let pid = ax.pid(of: window)
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        }
+        _ = ax.raise(window)
+    }
+
+    private func firstEmptySlotIndex() -> Int? {
+        slotWindowIDs.firstIndex(where: { $0 == nil })
+    }
+
+    private func animateWindow(_ window: AXUIElement, to target: CGRect) {
         guard let start = ax.frame(of: window) else {
             _ = ax.setFrame(of: window, to: target)
             return
@@ -399,133 +610,63 @@ final class LayoutController {
         )
     }
 
-    private func minimizeFocusedWindowAnimated() {
-        guard let window = ax.focusedWindow() else {
-            return
-        }
-
-        guard let start = ax.frame(of: window) else {
-            _ = ax.setMinimized(window, true)
-            return
-        }
-
-        let endWidth = max(140, start.width * 0.22)
-        let endHeight = max(90, start.height * 0.22)
-        let endX = start.midX - (endWidth / 2)
-        let endY = max(0, start.minY - 40)
-        let end = CGRect(x: endX, y: endY, width: endWidth, height: endHeight)
-
-        animator.animate(
-            window: window,
-            from: start,
-            to: end,
-            duration: AppConfig.animationDuration,
-            apply: { [ax] window, rect in
-                _ = ax.setFrame(of: window, to: rect)
-            },
-            completion: { [ax] in
-                _ = ax.setMinimized(window, true)
-            }
-        )
+    private func currentSlotFrames() -> [CGRect] {
+        slotFrames(count: slotWindowIDs.count, in: workspaceFrame())
     }
 
-    private func switchFocusedApp() {
-        guard let currentPID = ax.focusedAppPID(),
-              let nextPID = ax.nextAppPID(after: currentPID) else {
-            return
-        }
-
-        let activateNext: () -> Void = { [weak self] in
-            self?.activateAndSlideInApp(pid: nextPID)
-        }
-
-        guard let currentWindow = ax.focusedWindow(),
-              let start = ax.frame(of: currentWindow) else {
-            activateNext()
-            return
-        }
-
-        let end = CGRect(x: start.origin.x - AppConfig.slideDistance, y: start.origin.y, width: start.width, height: start.height)
-
-        animator.animate(
-            window: currentWindow,
-            from: start,
-            to: end,
-            duration: AppConfig.animationDuration,
-            apply: { [ax] window, rect in
-                _ = ax.setFrame(of: window, to: rect)
-            },
-            completion: { [ax] in
-                _ = ax.setMinimized(currentWindow, true)
-                activateNext()
-            }
-        )
-    }
-
-    private func activateAndSlideInApp(pid: pid_t) {
-        guard let app = NSRunningApplication(processIdentifier: pid) else {
-            return
-        }
-
-        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(AppConfig.activationDelay * 1_000_000_000))
-            guard let self,
-                  let window = self.ax.firstWindow(for: pid) else {
-                return
-            }
-
-            _ = self.ax.setMinimized(window, false)
-
-            let target = self.targetFrame(for: self.ax.frame(of: window))
-            let start = CGRect(x: target.origin.x + AppConfig.slideDistance, y: target.origin.y, width: target.width, height: target.height)
-            _ = self.ax.setFrame(of: window, to: start)
-
-            self.animator.animate(
-                window: window,
-                from: start,
-                to: target,
-                duration: AppConfig.animationDuration,
-                apply: { [ax = self.ax] window, rect in
-                    _ = ax.setFrame(of: window, to: rect)
-                }
-            )
-        }
-    }
-
-    private func targetFrame(for currentFrame: CGRect?) -> CGRect {
-        let screenFrame = preferredVisibleFrame(for: currentFrame)
+    private func activeFrame() -> CGRect {
+        let screenFrame = workspaceFrame()
         let proposed = CGRect(
-            x: screenFrame.origin.x + AppConfig.targetOffset.x,
-            y: screenFrame.origin.y + AppConfig.targetOffset.y,
-            width: AppConfig.targetSize.width,
-            height: AppConfig.targetSize.height
+            x: screenFrame.origin.x + AppConfig.activeOffset.x,
+            y: screenFrame.origin.y + AppConfig.activeOffset.y,
+            width: AppConfig.activeSize.width,
+            height: AppConfig.activeSize.height
         )
-
         return clamp(rect: proposed, to: screenFrame)
     }
 
-    private func preferredVisibleFrame(for currentFrame: CGRect?) -> CGRect {
-        if let currentFrame {
-            for screen in NSScreen.screens where screen.visibleFrame.intersects(currentFrame) {
-                return screen.visibleFrame
-            }
+    private func slotFrames(count: Int, in screenFrame: CGRect) -> [CGRect] {
+        guard count > 0 else {
+            return []
         }
 
-        return NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let slotWidth = AppConfig.slotSize.width
+        let slotHeight = AppConfig.slotSize.height
+        let gap = AppConfig.slotGap
+        let margin = AppConfig.slotMargin
+
+        let usableWidth = max(1, screenFrame.width - (2 * margin))
+        let columns = max(1, Int((usableWidth + gap) / (slotWidth + gap)))
+        var frames: [CGRect] = []
+        frames.reserveCapacity(count)
+
+        for index in 0..<count {
+            let row = index / columns
+            let column = index % columns
+
+            let x = screenFrame.minX + margin + (CGFloat(column) * (slotWidth + gap))
+            let y = screenFrame.minY + margin + (CGFloat(row) * (slotHeight + gap))
+            let frame = clamp(
+                rect: CGRect(x: x, y: y, width: slotWidth, height: slotHeight),
+                to: screenFrame
+            )
+            frames.append(frame)
+        }
+
+        return frames
+    }
+
+    private func workspaceFrame() -> CGRect {
+        NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
     }
 
     private func clamp(rect: CGRect, to bounds: CGRect) -> CGRect {
         let width = min(rect.width, bounds.width)
         let height = min(rect.height, bounds.height)
-
         let xMax = bounds.maxX - width
         let yMax = bounds.maxY - height
-
         let x = min(max(rect.origin.x, bounds.origin.x), xMax)
         let y = min(max(rect.origin.y, bounds.origin.y), yMax)
-
         return CGRect(x: x, y: y, width: width, height: height)
     }
 }
@@ -546,7 +687,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             controller = try LayoutController()
             print("sir-mix-a-layout is running.")
-            print("Hotkeys: Ctrl+Option+Cmd+W place, Ctrl+Option+Cmd+M minimize, Ctrl+Option+Cmd+Tab switch app.")
+            if let controller {
+                print("Active keybindings:")
+                print(controller.startupKeybindingsText())
+            }
         } catch {
             fputs("Failed to start hotkey manager: \(error)\n", stderr)
             NSApplication.shared.terminate(nil)

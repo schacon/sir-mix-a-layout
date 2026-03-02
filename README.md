@@ -1,12 +1,17 @@
 # sir-mix-a-layout
 
-A lightweight macOS window manager utility with animated layout, minimize, and app-switch behavior.
+A lightweight macOS window manager utility with animated slot mode.
 
 ## What it does
 
-- `Ctrl + Option + Cmd + W`: Move the focused window to a fixed offset/size with animation.
-- `Ctrl + Option + Cmd + M`: Animate the focused window smaller, then minimize it.
-- `Ctrl + Option + Cmd + Tab`: Animate current app window out, minimize it, activate next app, and slide its window into place.
+- `Shift + Cmd + P`: Toggle mode.
+- Mode ON:
+  - All currently visible windows are moved into 200x200 slots at the bottom of the screen.
+  - `Cmd + 1..9` moves a slotted window into the active area.
+  - `Shift + Cmd + O` moves the current active window back into an empty slot.
+  - `Shift + Cmd + 1..9` swaps the active window with the chosen slot.
+- Mode OFF:
+  - All managed windows are restored to their original sizes/positions.
 
 ## Requirements
 
@@ -24,6 +29,8 @@ Grant Accessibility access to the running binary (for example Terminal, or the b
 
 `System Settings -> Privacy & Security -> Accessibility`
 
+The app will try to prompt for access on startup and open the Accessibility settings page automatically.
+
 ## Customize layout and animation
 
 Edit constants in:
@@ -32,11 +39,13 @@ Edit constants in:
 
 Look for `AppConfig`:
 
-- `targetOffset`
-- `targetSize`
+- `activeOffset`
+- `activeSize`
+- `slotSize`
+- `slotGap`
+- `slotMargin`
 - `animationDuration`
-- `slideDistance`
-- `activationDelay`
+- `maxSlots`
 
 ## Notes
 
