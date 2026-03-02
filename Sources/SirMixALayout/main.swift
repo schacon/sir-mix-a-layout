@@ -10,7 +10,7 @@ struct AppConfig {
     static let slotStartY: CGFloat = 50
     static let slotVerticalGap: CGFloat = 100
     static let splitGap: CGFloat = 20
-    static let animationDuration: CFTimeInterval = 0.22
+    static let animationDuration: CFTimeInterval = 0.29
     static let maxSlots = 4
 }
 
@@ -1122,29 +1122,65 @@ final class LayoutController {
 
     private func swapActiveWindows() {
         guard modeEnabled,
-              activeWidthMode == .half,
-              let leftIndex = activeSlotIndex,
-              let rightIndex = secondarySlotIndex,
-              leftIndex >= 0,
-              leftIndex < slotWindowIDs.count,
-              rightIndex >= 0,
-              rightIndex < slotWindowIDs.count,
-              let leftID = slotWindowIDs[leftIndex],
-              let rightID = slotWindowIDs[rightIndex],
-              let leftState = managedWindows[leftID],
-              let rightState = managedWindows[rightID] else {
+              activeWidthMode == .half else {
             return
         }
 
-        activeSlotIndex = rightIndex
-        secondarySlotIndex = leftIndex
-        activeWindowID = rightID
-        leftState.slotIndex = nil
-        rightState.slotIndex = nil
+        if let leftIndex = activeSlotIndex,
+           let rightIndex = secondarySlotIndex,
+           leftIndex >= 0,
+           leftIndex < slotWindowIDs.count,
+           rightIndex >= 0,
+           rightIndex < slotWindowIDs.count,
+           let leftID = slotWindowIDs[leftIndex],
+           let rightID = slotWindowIDs[rightIndex],
+           let leftState = managedWindows[leftID],
+           let rightState = managedWindows[rightID] {
+            activeSlotIndex = rightIndex
+            secondarySlotIndex = leftIndex
+            activeWindowID = rightID
+            leftState.slotIndex = nil
+            rightState.slotIndex = nil
 
-        animateWindow(leftState.window, to: secondaryActiveFrame())
-        bringWindowForward(rightState.window)
-        animateWindow(rightState.window, to: activeFrame())
+            animateWindow(leftState.window, to: secondaryActiveFrame())
+            bringWindowForward(rightState.window)
+            animateWindow(rightState.window, to: activeFrame())
+            refreshSlotPanel()
+            return
+        }
+
+        if let leftIndex = activeSlotIndex,
+           leftIndex >= 0,
+           leftIndex < slotWindowIDs.count,
+           let leftID = slotWindowIDs[leftIndex],
+           let leftState = managedWindows[leftID] {
+            activeSlotIndex = nil
+            secondarySlotIndex = leftIndex
+            activeWindowID = nil
+            leftState.slotIndex = nil
+
+            bringWindowForward(leftState.window)
+            animateWindow(leftState.window, to: secondaryActiveFrame())
+            refreshSlotPanel()
+            return
+        }
+
+        if let rightIndex = secondarySlotIndex,
+           rightIndex >= 0,
+           rightIndex < slotWindowIDs.count,
+           let rightID = slotWindowIDs[rightIndex],
+           let rightState = managedWindows[rightID] {
+            activeSlotIndex = rightIndex
+            secondarySlotIndex = nil
+            activeWindowID = rightID
+            rightState.slotIndex = nil
+
+            bringWindowForward(rightState.window)
+            animateWindow(rightState.window, to: activeFrame())
+            refreshSlotPanel()
+            return
+        }
+
         refreshSlotPanel()
     }
 
@@ -1203,7 +1239,7 @@ final class LayoutController {
         }
 
         let canMinimizeAll = modeEnabled && (activeSlotIndex != nil || secondarySlotIndex != nil)
-        let canSwap = modeEnabled && activeWidthMode == .half && activeSlotIndex != nil && secondarySlotIndex != nil
+        let canSwap = modeEnabled && activeWidthMode == .half && (activeSlotIndex != nil || secondarySlotIndex != nil)
         slotPanel.update(items: items, canMinimizeAll: canMinimizeAll, canSwap: canSwap)
     }
 
