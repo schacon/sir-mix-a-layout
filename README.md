@@ -5,6 +5,7 @@ A lightweight macOS window manager utility with animated slot mode.
 ## What it does
 
 - `Ctrl + Cmd + P`: Toggle mode.
+- `Ctrl + Cmd + I`: Toggle active window width between half and full (starts in half mode).
 - Mode ON:
   - Only the first 4 visible windows are managed; all others are ignored.
   - Those 4 windows are assigned to fixed slot keys:

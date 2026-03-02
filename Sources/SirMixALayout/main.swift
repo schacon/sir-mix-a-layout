@@ -364,6 +364,20 @@ final class WindowAnimator {
 
 @MainActor
 final class LayoutController {
+    enum ActiveWidthMode {
+        case half
+        case full
+
+        var label: String {
+            switch self {
+            case .half:
+                return "half"
+            case .full:
+                return "full"
+            }
+        }
+    }
+
     struct SlotAnchor {
         let rightX: CGFloat
         let y: CGFloat
@@ -393,6 +407,7 @@ final class LayoutController {
     private var slotWindowIDs: [String?] = []
     private var activeSlotIndex: Int?
     private var activeWindowID: String?
+    private var activeWidthMode: ActiveWidthMode = .half
 
     private let ctrlCmdModifier: UInt32 = UInt32(controlKey | cmdKey)
     private let keybindings: [String]
@@ -410,6 +425,7 @@ final class LayoutController {
     private static func buildKeybindingDescriptions() -> [String] {
         [
             "Ctrl+Cmd+P: Toggle layout mode on/off",
+            "Ctrl+Cmd+I: Toggle active window width (half/full)",
             "Ctrl+Cmd+B/N/M/, : Toggle slot 1..4 window between slot and active area",
             "Ctrl+Cmd on a different slot switches active window"
         ]
@@ -421,6 +437,14 @@ final class LayoutController {
         ) { [weak self] in
             Task { @MainActor in
                 self?.toggleMode()
+            }
+        }
+
+        try hotkeys.register(
+            KeyCombo(keyCode: UInt32(kVK_ANSI_I), modifiers: ctrlCmdModifier)
+        ) { [weak self] in
+            Task { @MainActor in
+                self?.toggleActiveWidthMode()
             }
         }
 
@@ -448,6 +472,19 @@ final class LayoutController {
         } else {
             enterMode()
         }
+    }
+
+    private func toggleActiveWidthMode() {
+        activeWidthMode = (activeWidthMode == .half) ? .full : .half
+        print("Active width mode: \(activeWidthMode.label)")
+
+        guard modeEnabled,
+              let activeWindowID,
+              let activeState = managedWindows[activeWindowID] else {
+            return
+        }
+
+        animateWindow(activeState.window, to: activeFrame())
     }
 
     private func enterMode() {
@@ -700,10 +737,13 @@ final class LayoutController {
 
     private func activeFrame() -> CGRect {
         let screenFrame = workspaceFrame()
+        let x = screenFrame.origin.x + AppConfig.activeOffset.x
+        let availableWidth = max(320, screenFrame.maxX - x)
+        let width: CGFloat = activeWidthMode == .half ? (availableWidth / 2.0) : availableWidth
         let proposed = CGRect(
-            x: screenFrame.origin.x + AppConfig.activeOffset.x,
+            x: x,
             y: screenFrame.origin.y + AppConfig.activeOffset.y,
-            width: AppConfig.activeSize.width,
+            width: width,
             height: AppConfig.activeSize.height
         )
         return clamp(rect: proposed, to: screenFrame)
