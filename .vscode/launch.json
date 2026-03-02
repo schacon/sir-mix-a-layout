@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:sir-mix-a-layout}",
+      "name": "Debug sir-mix-a-layout",
+      "target": "sir-mix-a-layout",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug sir-mix-a-layout"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:sir-mix-a-layout}",
+      "name": "Release sir-mix-a-layout",
+      "target": "sir-mix-a-layout",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release sir-mix-a-layout"
+    }
+  ]
+}
