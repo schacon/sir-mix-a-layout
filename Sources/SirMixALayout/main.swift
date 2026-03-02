@@ -406,6 +406,7 @@ final class LayoutController {
     private var managedWindows: [String: ManagedWindowState] = [:]
     private var slotWindowIDs: [String?] = []
     private var activeSlotIndex: Int?
+    private var secondarySlotIndex: Int?
     private var activeWindowID: String?
     private var activeWidthMode: ActiveWidthMode = .half
 
@@ -426,8 +427,8 @@ final class LayoutController {
         [
             "Ctrl+Cmd+P: Toggle layout mode on/off",
             "Ctrl+Cmd+I: Toggle active window width (half/full)",
-            "Ctrl+Cmd+B/N/M/, : Toggle slot 1..4 window between slot and active area",
-            "Ctrl+Cmd on a different slot switches active window"
+            "Ctrl+Cmd+B/N/M/, : Toggle slot 1..4 window in primary (left) active area",
+            "Ctrl+Cmd+H/J/K/L : Put slot 1..4 window in secondary (right) active area"
         ]
     }
 
@@ -464,6 +465,23 @@ final class LayoutController {
                 }
             }
         }
+
+        let secondarySlotKeyCodes: [UInt32] = [
+            UInt32(kVK_ANSI_H),
+            UInt32(kVK_ANSI_J),
+            UInt32(kVK_ANSI_K),
+            UInt32(kVK_ANSI_L)
+        ]
+
+        for (index, keyCode) in secondarySlotKeyCodes.enumerated() {
+            try hotkeys.register(
+                KeyCombo(keyCode: keyCode, modifiers: ctrlCmdModifier)
+            ) { [weak self] in
+                Task { @MainActor in
+                    self?.activateSecondarySlot(index)
+                }
+            }
+        }
     }
 
     private func toggleMode() {
@@ -475,16 +493,38 @@ final class LayoutController {
     }
 
     private func toggleActiveWidthMode() {
-        activeWidthMode = (activeWidthMode == .half) ? .full : .half
+        let nextMode: ActiveWidthMode = (activeWidthMode == .half) ? .full : .half
+        if nextMode == .full,
+           let secondaryIndex = secondarySlotIndex,
+           secondaryIndex >= 0,
+           secondaryIndex < slotWindowIDs.count,
+           let secondaryID = slotWindowIDs[secondaryIndex],
+           let secondaryState = managedWindows[secondaryID] {
+            secondaryState.slotIndex = secondaryIndex
+            animateToSlot(secondaryState.window, slotIndex: secondaryIndex)
+            secondarySlotIndex = nil
+        }
+
+        activeWidthMode = nextMode
         print("Active width mode: \(activeWidthMode.label)")
 
         guard modeEnabled,
-              let activeWindowID,
-              let activeState = managedWindows[activeWindowID] else {
+              let activeSlotIndex,
+              let primaryID = slotWindowIDs[activeSlotIndex],
+              let primaryState = managedWindows[primaryID] else {
             return
         }
 
-        animateWindow(activeState.window, to: activeFrame())
+        animateWindow(primaryState.window, to: activeFrame())
+
+        if activeWidthMode == .half,
+           let secondarySlotIndex,
+           secondarySlotIndex >= 0,
+           secondarySlotIndex < slotWindowIDs.count,
+           let secondaryID = slotWindowIDs[secondarySlotIndex],
+           let secondaryState = managedWindows[secondaryID] {
+            animateWindow(secondaryState.window, to: secondaryActiveFrame())
+        }
     }
 
     private func enterMode() {
@@ -516,6 +556,7 @@ final class LayoutController {
         modeEnabled = true
         managedWindows.removeAll()
         activeSlotIndex = nil
+        secondarySlotIndex = nil
         activeWindowID = nil
         slotWindowIDs = Array(repeating: nil, count: AppConfig.maxSlots)
 
@@ -544,6 +585,7 @@ final class LayoutController {
         let restoring = Array(managedWindows.values)
         modeEnabled = false
         activeSlotIndex = nil
+        secondarySlotIndex = nil
         activeWindowID = nil
         managedWindows.removeAll()
         slotWindowIDs.removeAll()
@@ -572,7 +614,31 @@ final class LayoutController {
             return
         }
 
+        if secondarySlotIndex == index {
+            secondarySlotIndex = nil
+            incomingState.slotIndex = index
+            animateToSlot(incomingState.window, slotIndex: index)
+            return
+        }
+
         if activeSlotIndex == index {
+            if let promotedSecondary = secondarySlotIndex,
+               promotedSecondary >= 0,
+               promotedSecondary < slotWindowIDs.count,
+               let promotedID = slotWindowIDs[promotedSecondary],
+               let promotedState = managedWindows[promotedID] {
+                incomingState.slotIndex = index
+                animateToSlot(incomingState.window, slotIndex: index)
+
+                activeSlotIndex = promotedSecondary
+                secondarySlotIndex = nil
+                promotedState.slotIndex = nil
+                activeWindowID = promotedID
+                bringWindowForward(promotedState.window)
+                animateSlotToActive(promotedState.window)
+                return
+            }
+
             activeSlotIndex = nil
             activeWindowID = nil
             incomingState.slotIndex = index
@@ -592,8 +658,88 @@ final class LayoutController {
         incomingState.slotIndex = nil
         activeSlotIndex = index
         activeWindowID = incomingID
+        if activeWidthMode == .half,
+           let secondarySlotIndex,
+           secondarySlotIndex >= 0,
+           secondarySlotIndex < slotWindowIDs.count,
+           let secondaryID = slotWindowIDs[secondarySlotIndex],
+           let secondaryState = managedWindows[secondaryID],
+           secondaryID == incomingID {
+            self.secondarySlotIndex = nil
+            secondaryState.slotIndex = nil
+        }
         bringWindowForward(incomingState.window)
         animateSlotToActive(incomingState.window)
+
+        if activeWidthMode == .half,
+           let secondarySlotIndex,
+           secondarySlotIndex >= 0,
+           secondarySlotIndex < slotWindowIDs.count,
+           let secondaryID = slotWindowIDs[secondarySlotIndex],
+           let secondaryState = managedWindows[secondaryID],
+           secondaryID != incomingID {
+            animateWindow(secondaryState.window, to: secondaryActiveFrame())
+        }
+    }
+
+    private func activateSecondarySlot(_ index: Int) {
+        guard modeEnabled,
+              index >= 0,
+              index < slotWindowIDs.count,
+              let secondaryID = slotWindowIDs[index],
+              let secondaryState = managedWindows[secondaryID] else {
+            return
+        }
+
+        if secondarySlotIndex == index {
+            secondarySlotIndex = nil
+            secondaryState.slotIndex = index
+            animateToSlot(secondaryState.window, slotIndex: index)
+            return
+        }
+
+        if activeWidthMode == .full {
+            activeWidthMode = .half
+            print("Active width mode: \(activeWidthMode.label)")
+        }
+
+        if activeSlotIndex == nil {
+            activeSlotIndex = index
+            secondarySlotIndex = nil
+            activeWindowID = secondaryID
+            secondaryState.slotIndex = nil
+            bringWindowForward(secondaryState.window)
+            animateSlotToActive(secondaryState.window)
+            return
+        }
+
+        if activeSlotIndex == index {
+            return
+        }
+
+        if let previousSecondary = secondarySlotIndex,
+           previousSecondary >= 0,
+           previousSecondary < slotWindowIDs.count,
+           previousSecondary != index,
+           let previousSecondaryID = slotWindowIDs[previousSecondary],
+           let previousSecondaryState = managedWindows[previousSecondaryID] {
+            previousSecondaryState.slotIndex = previousSecondary
+            animateToSlot(previousSecondaryState.window, slotIndex: previousSecondary)
+        }
+
+        secondarySlotIndex = index
+        secondaryState.slotIndex = nil
+
+        if let primaryIndex = activeSlotIndex,
+           primaryIndex >= 0,
+           primaryIndex < slotWindowIDs.count,
+           let primaryID = slotWindowIDs[primaryIndex],
+           let primaryState = managedWindows[primaryID] {
+            animateWindow(primaryState.window, to: activeFrame())
+        }
+
+        bringWindowForward(secondaryState.window)
+        animateWindow(secondaryState.window, to: secondaryActiveFrame())
     }
 
     private func bringWindowForward(_ window: AXUIElement) {
@@ -623,13 +769,13 @@ final class LayoutController {
     private func slotShortcutLabel(for index: Int) -> String {
         switch index {
         case 0:
-            return "Ctrl+Cmd+B"
+            return "Ctrl+Cmd+B/H"
         case 1:
-            return "Ctrl+Cmd+N"
+            return "Ctrl+Cmd+N/J"
         case 2:
-            return "Ctrl+Cmd+M"
+            return "Ctrl+Cmd+M/K"
         case 3:
-            return "Ctrl+Cmd+,"
+            return "Ctrl+Cmd+,/L"
         default:
             return "Ctrl+Cmd+?"
         }
@@ -744,6 +890,20 @@ final class LayoutController {
             x: x,
             y: screenFrame.origin.y + AppConfig.activeOffset.y,
             width: width,
+            height: AppConfig.activeSize.height
+        )
+        return clamp(rect: proposed, to: screenFrame)
+    }
+
+    private func secondaryActiveFrame() -> CGRect {
+        let screenFrame = workspaceFrame()
+        let x = screenFrame.origin.x + AppConfig.activeOffset.x
+        let availableWidth = max(320, screenFrame.maxX - x)
+        let halfWidth = availableWidth / 2.0
+        let proposed = CGRect(
+            x: x + halfWidth,
+            y: screenFrame.origin.y + AppConfig.activeOffset.y,
+            width: halfWidth,
             height: AppConfig.activeSize.height
         )
         return clamp(rect: proposed, to: screenFrame)

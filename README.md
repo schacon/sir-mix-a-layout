@@ -13,10 +13,15 @@ A lightweight macOS window manager utility with animated slot mode.
     - `Ctrl + Cmd + N` -> slot 2
     - `Ctrl + Cmd + M` -> slot 3
     - `Ctrl + Cmd + ,` -> slot 4
+    - `Ctrl + Cmd + H/J/K/L` target slots `1/2/3/4` for the right-side active pane
   - Pressing a slot key:
     - If that slot is inactive, it brings that window to the active area.
     - If that same slot is already active, it minimizes it back to its slot.
     - If a different slot is active, it switches the active window to the new slot.
+  - Pressing `Ctrl + Cmd + H/J/K/L`:
+    - Keeps the current active window in place (left pane in half mode).
+    - Moves the selected slot window into the right pane.
+    - If width mode is full, it automatically switches to half mode first.
   - Slots are `300x300`.
   - Slot 1 starts `50px` from the top, and each next slot is `400px` lower (`300 + 100 gap`).
   - Slot placement is top-right anchored, so windows that refuse to shrink overflow to the left.
