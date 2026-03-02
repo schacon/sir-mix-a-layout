@@ -6,8 +6,9 @@ A lightweight macOS window manager utility with animated slot mode.
 
 - `Shift + Cmd + P`: Toggle mode.
 - Mode ON:
-  - All currently visible windows are moved into 200x200 slots at the bottom of the screen.
-  - `Cmd + 1..9` moves a slotted window into the active area.
+  - All currently visible windows are moved into 200x200 slots in a vertical stack.
+  - Slot 1 starts at `x=50, y=50`, and each next slot is `250px` lower (`200 + 50 gap`).
+  - `Shift + Cmd + H/J/K/L/;` moves slot `1..5` to the active area.
   - `Shift + Cmd + O` moves the current active window back into an empty slot.
   - `Shift + Cmd + 1..9` swaps the active window with the chosen slot.
 - Mode OFF:
@@ -42,8 +43,9 @@ Look for `AppConfig`:
 - `activeOffset`
 - `activeSize`
 - `slotSize`
-- `slotGap`
-- `slotMargin`
+- `slotStartX`
+- `slotStartY`
+- `slotVerticalGap`
 - `animationDuration`
 - `maxSlots`
 

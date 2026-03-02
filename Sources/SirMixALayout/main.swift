@@ -6,10 +6,11 @@ struct AppConfig {
     static let activeOffset = CGPoint(x: 120, y: 120)
     static let activeSize = CGSize(width: 1320, height: 860)
     static let slotSize = CGSize(width: 200, height: 200)
-    static let slotGap: CGFloat = 20
-    static let slotMargin: CGFloat = 40
+    static let slotStartX: CGFloat = 50
+    static let slotStartY: CGFloat = 50
+    static let slotVerticalGap: CGFloat = 50
     static let animationDuration: CFTimeInterval = 0.22
-    static let maxSlots = 9
+    static let maxSlots = 5
 }
 
 struct KeyCombo {
@@ -366,7 +367,6 @@ final class LayoutController {
     private var slotWindowIDs: [String?] = []
     private var activeWindowID: String?
 
-    private let cmdModifier: UInt32 = UInt32(cmdKey)
     private let shiftCmdModifier: UInt32 = UInt32(shiftKey | cmdKey)
     private let keybindings: [String]
 
@@ -384,7 +384,7 @@ final class LayoutController {
         [
             "Shift+Cmd+P: Toggle layout mode on/off",
             "Shift+Cmd+O: Minimize active managed window into an empty slot",
-            "Cmd+1..9: Move slotted window to active area",
+            "Shift+Cmd+H/J/K/L/;: Move slot 1..5 window to active area",
             "Shift+Cmd+1..9: Swap active window with slot"
         ]
     }
@@ -406,21 +406,31 @@ final class LayoutController {
             }
         }
 
-        let numberKeyCodes: [UInt32] = [
-            UInt32(kVK_ANSI_1), UInt32(kVK_ANSI_2), UInt32(kVK_ANSI_3),
-            UInt32(kVK_ANSI_4), UInt32(kVK_ANSI_5), UInt32(kVK_ANSI_6),
-            UInt32(kVK_ANSI_7), UInt32(kVK_ANSI_8), UInt32(kVK_ANSI_9)
+        let slotActivationKeyCodes: [UInt32] = [
+            UInt32(kVK_ANSI_H),
+            UInt32(kVK_ANSI_J),
+            UInt32(kVK_ANSI_K),
+            UInt32(kVK_ANSI_L),
+            UInt32(kVK_ANSI_Semicolon)
         ]
 
-        for (index, keyCode) in numberKeyCodes.enumerated() {
+        for (index, keyCode) in slotActivationKeyCodes.enumerated() {
             try hotkeys.register(
-                KeyCombo(keyCode: keyCode, modifiers: cmdModifier)
+                KeyCombo(keyCode: keyCode, modifiers: shiftCmdModifier)
             ) { [weak self] in
                 Task { @MainActor in
                     self?.activateSlot(index)
                 }
             }
+        }
 
+        let swapKeyCodes: [UInt32] = [
+            UInt32(kVK_ANSI_1), UInt32(kVK_ANSI_2), UInt32(kVK_ANSI_3),
+            UInt32(kVK_ANSI_4), UInt32(kVK_ANSI_5), UInt32(kVK_ANSI_6),
+            UInt32(kVK_ANSI_7), UInt32(kVK_ANSI_8), UInt32(kVK_ANSI_9)
+        ]
+
+        for (index, keyCode) in swapKeyCodes.enumerated() {
             try hotkeys.register(
                 KeyCombo(keyCode: keyCode, modifiers: shiftCmdModifier)
             ) { [weak self] in
@@ -632,20 +642,13 @@ final class LayoutController {
 
         let slotWidth = AppConfig.slotSize.width
         let slotHeight = AppConfig.slotSize.height
-        let gap = AppConfig.slotGap
-        let margin = AppConfig.slotMargin
-
-        let usableWidth = max(1, screenFrame.width - (2 * margin))
-        let columns = max(1, Int((usableWidth + gap) / (slotWidth + gap)))
+        let gap = AppConfig.slotVerticalGap
+        let x = screenFrame.minX + AppConfig.slotStartX
         var frames: [CGRect] = []
         frames.reserveCapacity(count)
 
         for index in 0..<count {
-            let row = index / columns
-            let column = index % columns
-
-            let x = screenFrame.minX + margin + (CGFloat(column) * (slotWidth + gap))
-            let y = screenFrame.minY + margin + (CGFloat(row) * (slotHeight + gap))
+            let y = screenFrame.minY + AppConfig.slotStartY + (CGFloat(index) * (slotHeight + gap))
             let frame = clamp(
                 rect: CGRect(x: x, y: y, width: slotWidth, height: slotHeight),
                 to: screenFrame
