@@ -185,6 +185,11 @@ final class AXWindowService {
         return NSRunningApplication(processIdentifier: windowPID)?.localizedName
     }
 
+    func appIcon(of window: AXUIElement) -> NSImage? {
+        let windowPID = pid(of: window)
+        return NSRunningApplication(processIdentifier: windowPID)?.icon
+    }
+
     @discardableResult
     func raise(_ window: AXUIElement) -> Bool {
         AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
@@ -374,16 +379,17 @@ final class SlotPanelController: NSObject {
     struct Item {
         let index: Int
         let shortcut: String
-        let state: String
-        let windowName: String
+        let icon: NSImage?
         let enabled: Bool
+        let activePlacement: Placement?
     }
 
     private let window: NSWindow
     private let stackView = NSStackView()
     private let minimizeAllButton = NSButton(title: "Minimize All", target: nil, action: nil)
     private let swapButton = NSButton(title: "Swap", target: nil, action: nil)
-    private var rowLabels: [NSTextField] = []
+    private var shortcutLabels: [NSTextField] = []
+    private var iconViews: [NSImageView] = []
     private var rowButtons: [[NSButton]] = []
     private let onSelect: (Int, Placement) -> Void
     private let onMinimizeAll: () -> Void
@@ -394,7 +400,7 @@ final class SlotPanelController: NSObject {
         self.onMinimizeAll = onMinimizeAll
         self.onSwap = onSwap
         self.window = NSWindow(
-            contentRect: NSRect(x: 80, y: 80, width: 760, height: 54 + (CGFloat(slotCount) * 44)),
+            contentRect: NSRect(x: 80, y: 80, width: 100, height: 100),
             styleMask: [.titled, .closable, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -412,16 +418,16 @@ final class SlotPanelController: NSObject {
 
         stackView.orientation = .vertical
         stackView.alignment = .leading
-        stackView.distribution = .fillEqually
-        stackView.spacing = 8
+        stackView.distribution = .fill
+        stackView.spacing = 4
         stackView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
-            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
 
         minimizeAllButton.target = self
@@ -435,7 +441,8 @@ final class SlotPanelController: NSObject {
         let controlsRow = NSStackView()
         controlsRow.orientation = .horizontal
         controlsRow.alignment = .centerY
-        controlsRow.distribution = .gravityAreas
+        controlsRow.distribution = .fill
+        controlsRow.spacing = 6
         controlsRow.addArrangedSubview(minimizeAllButton)
         controlsRow.addArrangedSubview(swapButton)
         stackView.addArrangedSubview(controlsRow)
@@ -445,14 +452,7 @@ final class SlotPanelController: NSObject {
             row.orientation = .horizontal
             row.alignment = .centerY
             row.distribution = .fill
-            row.spacing = 8
-
-            let label = NSTextField(labelWithString: "")
-            label.lineBreakMode = .byTruncatingTail
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            label.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            row.addArrangedSubview(label)
-            rowLabels.append(label)
+            row.spacing = 6
 
             let fullButton = makeButton(title: "Full", index: index, placement: .full)
             let leftButton = makeButton(title: "Left Half", index: index, placement: .leftHalf)
@@ -461,12 +461,38 @@ final class SlotPanelController: NSObject {
             row.addArrangedSubview(fullButton)
             row.addArrangedSubview(leftButton)
             row.addArrangedSubview(rightButton)
+
+            let shortcutLabel = NSTextField(labelWithString: "")
+            shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
+            row.addArrangedSubview(shortcutLabel)
+            shortcutLabels.append(shortcutLabel)
+
+            let iconView = NSImageView()
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                iconView.widthAnchor.constraint(equalToConstant: 20),
+                iconView.heightAnchor.constraint(equalToConstant: 20)
+            ])
+            row.addArrangedSubview(iconView)
+            iconViews.append(iconView)
+
             rowButtons.append([fullButton, leftButton, rightButton])
             stackView.addArrangedSubview(row)
         }
+
+        resizeToFit()
     }
 
     func show() {
+        resizeToFit()
+        if let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            let frame = window.frame
+            let x = visible.maxX - frame.width - 20
+            let y = visible.maxY - frame.height - 20
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        }
         window.orderFrontRegardless()
     }
 
@@ -477,24 +503,31 @@ final class SlotPanelController: NSObject {
     func update(items: [Item], canMinimizeAll: Bool, canSwap: Bool) {
         minimizeAllButton.isEnabled = canMinimizeAll
         swapButton.isEnabled = canSwap
-        for index in 0..<rowLabels.count {
-            rowLabels[index].stringValue = "Slot \(index + 1): (empty)"
+        for index in 0..<shortcutLabels.count {
+            shortcutLabels[index].stringValue = "Slot \(index + 1)"
+            iconViews[index].image = nil
             for button in rowButtons[index] {
                 button.isEnabled = false
+                button.state = .off
             }
         }
 
-        for item in items where item.index >= 0 && item.index < rowLabels.count {
-            rowLabels[item.index].stringValue = "\(item.shortcut) [\(item.state)]  \(item.windowName)"
-            for button in rowButtons[item.index] {
+        for item in items where item.index >= 0 && item.index < shortcutLabels.count {
+            shortcutLabels[item.index].stringValue = item.shortcut
+            iconViews[item.index].image = item.icon
+            for (buttonIndex, button) in rowButtons[item.index].enumerated() {
                 button.isEnabled = item.enabled
+                button.state = item.activePlacement?.rawValue == buttonIndex ? .on : .off
             }
         }
+
+        resizeToFit()
     }
 
     private func makeButton(title: String, index: Int, placement: Placement) -> NSButton {
         let button = NSButton(title: title, target: self, action: #selector(buttonPressed(_:)))
         button.tag = (index * 10) + placement.rawValue
+        button.setButtonType(.pushOnPushOff)
         button.bezelStyle = .rounded
         button.setContentHuggingPriority(.required, for: .horizontal)
         return button
@@ -515,6 +548,17 @@ final class SlotPanelController: NSObject {
 
     @objc private func swapPressed() {
         onSwap()
+    }
+
+    private func resizeToFit() {
+        guard let contentView = window.contentView else {
+            return
+        }
+        contentView.layoutSubtreeIfNeeded()
+        let size = stackView.fittingSize
+        if size.width > 0, size.height > 0 {
+            window.setContentSize(size)
+        }
     }
 }
 
@@ -930,6 +974,20 @@ final class LayoutController {
             return
         }
 
+        if currentPlacement(for: index) == placement {
+            if activeSlotIndex == index {
+                activeSlotIndex = nil
+                activeWindowID = nil
+            }
+            if secondarySlotIndex == index {
+                secondarySlotIndex = nil
+            }
+            selectedState.slotIndex = index
+            animateToSlot(selectedState.window, slotIndex: index)
+            refreshSlotPanel()
+            return
+        }
+
         switch placement {
         case .full:
             if let secondaryIndex = secondarySlotIndex,
@@ -1120,24 +1178,16 @@ final class LayoutController {
 
         for index in 0..<AppConfig.maxSlots {
             let shortcut = slotShortcutLabel(for: index)
-            let stateLabel: String
-            if activeSlotIndex == index {
-                stateLabel = "ACTIVE-L"
-            } else if secondarySlotIndex == index {
-                stateLabel = "ACTIVE-R"
-            } else {
-                stateLabel = "SLOT"
-            }
-
-            let windowName: String
+            let icon: NSImage?
             let enabled: Bool
+            let activePlacement = currentPlacement(for: index)
             if index < slotWindowIDs.count,
                let windowID = slotWindowIDs[index],
                let state = managedWindows[windowID] {
-                windowName = windowLabel(for: state.window)
+                icon = ax.appIcon(of: state.window)
                 enabled = modeEnabled
             } else {
-                windowName = "(empty)"
+                icon = nil
                 enabled = false
             }
 
@@ -1145,9 +1195,9 @@ final class LayoutController {
                 SlotPanelController.Item(
                     index: index,
                     shortcut: shortcut,
-                    state: stateLabel,
-                    windowName: windowName,
-                    enabled: enabled
+                    icon: icon,
+                    enabled: enabled,
+                    activePlacement: activePlacement
                 )
             )
         }
@@ -1155,6 +1205,16 @@ final class LayoutController {
         let canMinimizeAll = modeEnabled && (activeSlotIndex != nil || secondarySlotIndex != nil)
         let canSwap = modeEnabled && activeWidthMode == .half && activeSlotIndex != nil && secondarySlotIndex != nil
         slotPanel.update(items: items, canMinimizeAll: canMinimizeAll, canSwap: canSwap)
+    }
+
+    private func currentPlacement(for index: Int) -> SlotPanelController.Placement? {
+        if activeSlotIndex == index {
+            return activeWidthMode == .full ? .full : .leftHalf
+        }
+        if secondarySlotIndex == index, activeWidthMode == .half {
+            return .rightHalf
+        }
+        return nil
     }
 
     private func slotShortcutLabel(for index: Int) -> String {

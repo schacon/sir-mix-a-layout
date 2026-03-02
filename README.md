@@ -26,7 +26,8 @@ A lightweight macOS window manager utility with animated slot mode.
   - Slot 1 starts `50px` from the top, and each next slot is `400px` lower (`300 + 100 gap`).
   - Slot placement is top-right anchored, so windows that refuse to shrink overflow to the left.
   - On enable, the app prints which window was assigned to each slot key.
-  - On enable, a floating "Window Slots" panel appears; each row has `Full`, `Left Half`, `Right Half` buttons to place that slot window directly into that target position.
+  - On enable, a floating "Window Slots" panel appears; each row shows the app dock icon and `Full`, `Left Half`, `Right Half` buttons to place that slot window directly into that target position.
+  - The active placement button is highlighted per row; clicking that same highlighted button again minimizes that window back to its slot.
   - In half mode, the two active panes are slightly narrower and keep a `20px` gap between them.
   - The panel also has `Minimize All` (send all actives back to slots) and `Swap` (active only when both left/right panes are populated).
 - Mode OFF:
