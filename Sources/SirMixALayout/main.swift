@@ -3,15 +3,137 @@ import Carbon.HIToolbox
 import QuartzCore
 
 struct AppConfig {
-    static let activeOffset = CGPoint(x: 500, y: 120)
-    static let activeSize = CGSize(width: 1320, height: 860)
     static let slotSize = CGSize(width: 300, height: 300)
-    static let slotStartX: CGFloat = 50
-    static let slotStartY: CGFloat = 50
-    static let slotVerticalGap: CGFloat = 100
-    static let splitGap: CGFloat = 20
-    static let animationDuration: CFTimeInterval = 0.29
     static let maxSlots = 4
+}
+
+struct LayoutRuntimeConfig {
+    var slotVerticalGap: CGFloat = 100
+    var slotTopOffset: CGFloat = 50
+    var slotLeftOffset: CGFloat = 50
+    var activeLeftOffset: CGFloat = 500
+    var activeTopOffset: CGFloat = 120
+    var activeAreaWidth: CGFloat = 1320
+    var activeAreaHeight: CGFloat = 860
+    var activeSplitGap: CGFloat = 20
+    var controlPanelLeftOffset: CGFloat = 50
+    var controlPanelTopOffset: CGFloat = 20
+    var animationDuration: TimeInterval = 0.29
+
+    static var fileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config")
+            .appendingPathComponent("sir-mix-a-layout")
+            .appendingPathComponent("config.toml")
+    }
+
+    static func loadFromDisk() -> LayoutRuntimeConfig {
+        let defaults = LayoutRuntimeConfig()
+        let url = fileURL
+        let fileManager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+
+        if !fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                try defaultFileContents().write(to: url, atomically: true, encoding: .utf8)
+                print("Created default config at \(url.path)")
+            } catch {
+                print("Failed to create config at \(url.path): \(error). Using built-in defaults.")
+            }
+            return defaults
+        }
+
+        do {
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            return parse(contents: contents, defaults: defaults)
+        } catch {
+            print("Failed to read config at \(url.path): \(error). Using built-in defaults.")
+            return defaults
+        }
+    }
+
+    static func defaultFileContents() -> String {
+        """
+        # sir-mix-a-layout runtime config
+        # Read each time mode is enabled (Ctrl+Cmd+P).
+
+        slot_vertical_gap = 100
+        slot_top_offset = 50
+        slot_left_offset = 50
+
+        active_left_offset = 500
+        active_top_offset = 120
+        active_area_width = 1320
+        active_area_height = 860
+        active_split_gap = 20
+
+        control_panel_left_offset = 50
+        control_panel_top_offset = 20
+
+        animation_duration = 0.29
+        """
+    }
+
+    private static func parse(contents: String, defaults: LayoutRuntimeConfig) -> LayoutRuntimeConfig {
+        var parsed = defaults
+
+        for (lineNumber, rawLine) in contents.components(separatedBy: .newlines).enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") || line.hasPrefix("[") {
+                continue
+            }
+
+            guard let separator = line.firstIndex(of: "=") else {
+                print("Ignoring config line \(lineNumber + 1): missing '='")
+                continue
+            }
+
+            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            var valueText = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let commentStart = valueText.firstIndex(of: "#") {
+                valueText = valueText[..<commentStart].trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            guard !valueText.isEmpty, let value = Double(valueText) else {
+                print("Ignoring config line \(lineNumber + 1): non-numeric value for '\(key)'")
+                continue
+            }
+
+            let number = CGFloat(value)
+            switch key {
+            case "slot_vertical_gap":
+                parsed.slotVerticalGap = max(0, number)
+            case "slot_top_offset":
+                parsed.slotTopOffset = number
+            case "slot_left_offset":
+                parsed.slotLeftOffset = number
+            case "active_left_offset":
+                parsed.activeLeftOffset = number
+            case "active_top_offset":
+                parsed.activeTopOffset = number
+            case "active_area_width":
+                parsed.activeAreaWidth = max(240, number)
+            case "active_area_height":
+                parsed.activeAreaHeight = max(120, number)
+            case "active_split_gap":
+                parsed.activeSplitGap = max(0, number)
+            case "control_panel_left_offset":
+                parsed.controlPanelLeftOffset = max(0, number)
+            case "control_panel_right_offset":
+                // Backward-compatible fallback for older configs.
+                parsed.controlPanelLeftOffset = max(0, number)
+            case "control_panel_top_offset":
+                parsed.controlPanelTopOffset = max(0, number)
+            case "animation_duration":
+                parsed.animationDuration = max(0, TimeInterval(value))
+            default:
+                print("Ignoring unknown config key '\(key)' (line \(lineNumber + 1))")
+            }
+        }
+
+        return parsed
+    }
 }
 
 struct KeyCombo {
@@ -454,6 +576,17 @@ final class SlotPanelController: NSObject {
             row.distribution = .fill
             row.spacing = 6
 
+            let iconView = NSImageView()
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconView.setContentHuggingPriority(.required, for: .horizontal)
+            NSLayoutConstraint.activate([
+                iconView.widthAnchor.constraint(equalToConstant: 20),
+                iconView.heightAnchor.constraint(equalToConstant: 20)
+            ])
+            row.addArrangedSubview(iconView)
+            iconViews.append(iconView)
+
             let fullButton = makeButton(title: "Full", index: index, placement: .full)
             let leftButton = makeButton(title: "Left Half", index: index, placement: .leftHalf)
             let rightButton = makeButton(title: "Right Half", index: index, placement: .rightHalf)
@@ -467,16 +600,6 @@ final class SlotPanelController: NSObject {
             row.addArrangedSubview(shortcutLabel)
             shortcutLabels.append(shortcutLabel)
 
-            let iconView = NSImageView()
-            iconView.imageScaling = .scaleProportionallyUpOrDown
-            iconView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                iconView.widthAnchor.constraint(equalToConstant: 20),
-                iconView.heightAnchor.constraint(equalToConstant: 20)
-            ])
-            row.addArrangedSubview(iconView)
-            iconViews.append(iconView)
-
             rowButtons.append([fullButton, leftButton, rightButton])
             stackView.addArrangedSubview(row)
         }
@@ -484,13 +607,13 @@ final class SlotPanelController: NSObject {
         resizeToFit()
     }
 
-    func show() {
+    func show(leftOffset: CGFloat, topOffset: CGFloat) {
         resizeToFit()
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
+            let x = visible.minX + leftOffset
             let frame = window.frame
-            let x = visible.maxX - frame.width - 20
-            let y = visible.maxY - frame.height - 20
+            let y = visible.maxY - frame.height - topOffset
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
         window.orderFrontRegardless()
@@ -618,12 +741,14 @@ final class LayoutController {
     private var secondarySlotIndex: Int?
     private var activeWindowID: String?
     private var activeWidthMode: ActiveWidthMode = .half
+    private var layoutConfig = LayoutRuntimeConfig()
 
     private let ctrlCmdModifier: UInt32 = UInt32(controlKey | cmdKey)
     private let keybindings: [String]
 
     init() throws {
         hotkeys = try HotkeyManager()
+        layoutConfig = LayoutRuntimeConfig.loadFromDisk()
         keybindings = LayoutController.buildKeybindingDescriptions()
         try registerHotkeys()
         refreshSlotPanel()
@@ -744,6 +869,8 @@ final class LayoutController {
             return
         }
 
+        layoutConfig = LayoutRuntimeConfig.loadFromDisk()
+
         let discovered = ax.visibleWindows(limit: AppConfig.maxSlots)
         var windows: [(window: AXUIElement, frame: CGRect, minimized: Bool, id: String)] = []
         var seen = Set<String>()
@@ -786,7 +913,10 @@ final class LayoutController {
         }
 
         refreshSlotPanel()
-        slotPanel.show()
+        slotPanel.show(
+            leftOffset: layoutConfig.controlPanelLeftOffset,
+            topOffset: layoutConfig.controlPanelTopOffset
+        )
         print("Layout mode ON (\(min(windows.count, AppConfig.maxSlots)) windows assigned).")
         print(slotAssignmentsText())
     }
@@ -810,7 +940,8 @@ final class LayoutController {
         }
 
         Task { @MainActor [ax] in
-            try? await Task.sleep(nanoseconds: UInt64((AppConfig.animationDuration + 0.05) * 1_000_000_000))
+            let delay = max(0, layoutConfig.animationDuration) + 0.05
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             for state in restoring where state.originalMinimized {
                 _ = ax.setMinimized(state.window, true)
             }
@@ -1278,7 +1409,8 @@ final class LayoutController {
         return appName
     }
 
-    private func animateWindow(_ window: AXUIElement, to target: CGRect, duration: TimeInterval = AppConfig.animationDuration, completion: (() -> Void)? = nil) {
+    private func animateWindow(_ window: AXUIElement, to target: CGRect, duration: TimeInterval? = nil, completion: (() -> Void)? = nil) {
+        let effectiveDuration = max(0, duration ?? layoutConfig.animationDuration)
         guard let start = ax.frame(of: window) else {
             _ = ax.setFrame(of: window, to: target)
             completion?()
@@ -1289,7 +1421,7 @@ final class LayoutController {
             window: window,
             from: start,
             to: target,
-            duration: duration,
+            duration: effectiveDuration,
             apply: { [ax] window, rect in
                 _ = ax.setFrame(of: window, to: rect)
             },
@@ -1304,7 +1436,7 @@ final class LayoutController {
             return
         }
 
-        let phase = max(0.08, AppConfig.animationDuration / 2.0)
+        let phase = max(0.08, max(0, layoutConfig.animationDuration) / 2.0)
         let expandFrame = CGRect(
             x: start.origin.x,
             y: target.origin.y,
@@ -1335,7 +1467,7 @@ final class LayoutController {
             return
         }
 
-        let phase = max(0.08, AppConfig.animationDuration / 2.0)
+        let phase = max(0.08, max(0, layoutConfig.animationDuration) / 2.0)
         let slideFrame = CGRect(
             x: slotRect.origin.x,
             y: start.origin.y,
@@ -1371,33 +1503,35 @@ final class LayoutController {
 
     private func activeFrame() -> CGRect {
         let screenFrame = workspaceFrame()
-        let x = screenFrame.origin.x + AppConfig.activeOffset.x
-        let availableWidth = max(320, screenFrame.maxX - x)
+        let x = screenFrame.origin.x + layoutConfig.activeLeftOffset
+        let totalWidth = max(240, layoutConfig.activeAreaWidth)
+        let splitGap = max(0, layoutConfig.activeSplitGap)
         let width: CGFloat
         if activeWidthMode == .half {
-            width = max(120, (availableWidth - AppConfig.splitGap) / 2.0)
+            width = max(120, (totalWidth - splitGap) / 2.0)
         } else {
-            width = availableWidth
+            width = totalWidth
         }
         let proposed = CGRect(
             x: x,
-            y: screenFrame.origin.y + AppConfig.activeOffset.y,
+            y: screenFrame.origin.y + layoutConfig.activeTopOffset,
             width: width,
-            height: AppConfig.activeSize.height
+            height: max(120, layoutConfig.activeAreaHeight)
         )
         return clamp(rect: proposed, to: screenFrame)
     }
 
     private func secondaryActiveFrame() -> CGRect {
         let screenFrame = workspaceFrame()
-        let x = screenFrame.origin.x + AppConfig.activeOffset.x
-        let availableWidth = max(320, screenFrame.maxX - x)
-        let halfWidth = max(120, (availableWidth - AppConfig.splitGap) / 2.0)
+        let x = screenFrame.origin.x + layoutConfig.activeLeftOffset
+        let totalWidth = max(240, layoutConfig.activeAreaWidth)
+        let splitGap = max(0, layoutConfig.activeSplitGap)
+        let halfWidth = max(120, (totalWidth - splitGap) / 2.0)
         let proposed = CGRect(
-            x: x + halfWidth + AppConfig.splitGap,
-            y: screenFrame.origin.y + AppConfig.activeOffset.y,
+            x: x + halfWidth + splitGap,
+            y: screenFrame.origin.y + layoutConfig.activeTopOffset,
             width: halfWidth,
-            height: AppConfig.activeSize.height
+            height: max(120, layoutConfig.activeAreaHeight)
         )
         return clamp(rect: proposed, to: screenFrame)
     }
@@ -1413,8 +1547,8 @@ final class LayoutController {
     }
 
     private func slotAnchor(for index: Int, in screenFrame: CGRect) -> SlotAnchor {
-        let rightX = screenFrame.minX + AppConfig.slotStartX + AppConfig.slotSize.width
-        let y = screenFrame.minY + AppConfig.slotStartY + (CGFloat(index) * (AppConfig.slotSize.height + AppConfig.slotVerticalGap))
+        let rightX = screenFrame.minX + layoutConfig.slotLeftOffset + AppConfig.slotSize.width
+        let y = screenFrame.minY + layoutConfig.slotTopOffset + (CGFloat(index) * (AppConfig.slotSize.height + layoutConfig.slotVerticalGap))
         return SlotAnchor(rightX: rightX, y: y)
     }
 

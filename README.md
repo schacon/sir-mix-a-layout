@@ -29,7 +29,7 @@ A lightweight macOS window manager utility with animated slot mode.
   - On enable, a floating "Window Slots" panel appears; each row shows the app dock icon and `Full`, `Left Half`, `Right Half` buttons to place that slot window directly into that target position.
   - The active placement button is highlighted per row; clicking that same highlighted button again minimizes that window back to its slot.
   - In half mode, the two active panes are slightly narrower and keep a `20px` gap between them.
-  - The panel also has `Minimize All` (send all actives back to slots) and `Swap` (active only when both left/right panes are populated).
+  - The panel also has `Minimize All` (send all actives back to slots) and `Swap` (works with one or two half panes active).
 - Mode OFF:
   - All managed windows are restored to their original sizes/positions.
 
@@ -51,22 +51,32 @@ Grant Accessibility access to the running binary (for example Terminal, or the b
 
 The app will try to prompt for access on startup and open the Accessibility settings page automatically.
 
-## Customize layout and animation
+## Customize layout via TOML
 
-Edit constants in:
+On first enable (`Ctrl + Cmd + P`), the app reads:
 
-`Sources/SirMixALayout/main.swift`
+`~/.config/sir-mix-a-layout/config.toml`
 
-Look for `AppConfig`:
+If missing, it creates the file with defaults:
 
-- `activeOffset`
-- `activeSize`
-- `slotSize`
-- `slotStartX`
-- `slotStartY`
-- `slotVerticalGap`
-- `animationDuration`
-- `maxSlots`
+```toml
+slot_vertical_gap = 100
+slot_top_offset = 50
+slot_left_offset = 50
+
+active_left_offset = 500
+active_top_offset = 120
+active_area_width = 1320
+active_area_height = 860
+active_split_gap = 20
+
+control_panel_left_offset = 50
+control_panel_top_offset = 20
+
+animation_duration = 0.29
+```
+
+These values are reloaded each time you enable mode.
 
 ## Notes
 
