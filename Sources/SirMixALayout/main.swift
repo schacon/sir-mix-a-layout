@@ -1467,25 +1467,36 @@ final class LayoutController {
             return
         }
 
-        let phase = max(0.08, max(0, layoutConfig.animationDuration) / 2.0)
+        let phase = max(0.05, max(0, layoutConfig.animationDuration) / 4.0)
+        let fixedWidth = start.width
+        let targetX = anchor.rightX - fixedWidth
         let slideFrame = CGRect(
-            x: slotRect.origin.x,
+            x: targetX,
             y: start.origin.y,
-            width: start.width,
+            width: fixedWidth,
             height: start.height
+        )
+        let moveFrame = CGRect(
+            x: targetX,
+            y: slotRect.origin.y,
+            width: fixedWidth,
+            height: start.height
+        )
+        let shrinkHeightFrame = CGRect(
+            x: moveFrame.origin.x,
+            y: moveFrame.origin.y,
+            width: moveFrame.width,
+            height: slotRect.height
         )
 
         animateWindow(window, to: slideFrame, duration: phase) { [weak self] in
             guard let self else { return }
-            let shrinkFrame = CGRect(
-                x: slideFrame.origin.x,
-                y: slideFrame.origin.y,
-                width: slotRect.width,
-                height: slotRect.height
-            )
-            self.animateWindow(window, to: shrinkFrame, duration: phase) { [weak self] in
+            self.animateWindow(window, to: moveFrame, duration: phase) { [weak self] in
                 guard let self else { return }
-                self.alignWindow(window, to: anchor)
+                self.animateWindow(window, to: shrinkHeightFrame, duration: phase) { [weak self] in
+                    guard let self else { return }
+                    self.alignWindow(window, to: anchor)
+                }
             }
         }
     }
@@ -1537,18 +1548,20 @@ final class LayoutController {
     }
 
     private func slotFrame(for index: Int, in screenFrame: CGRect) -> CGRect {
+        let slotHeight = max(120, layoutConfig.activeAreaHeight)
         let anchor = slotAnchor(for: index, in: screenFrame)
         return CGRect(
             x: anchor.rightX - AppConfig.slotSize.width,
             y: anchor.y,
             width: AppConfig.slotSize.width,
-            height: AppConfig.slotSize.height
+            height: slotHeight
         )
     }
 
     private func slotAnchor(for index: Int, in screenFrame: CGRect) -> SlotAnchor {
+        _ = index
         let rightX = screenFrame.minX + layoutConfig.slotLeftOffset + AppConfig.slotSize.width
-        let y = screenFrame.minY + layoutConfig.slotTopOffset + (CGFloat(index) * (AppConfig.slotSize.height + layoutConfig.slotVerticalGap))
+        let y = screenFrame.minY + layoutConfig.slotTopOffset
         return SlotAnchor(rightX: rightX, y: y)
     }
 

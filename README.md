@@ -78,6 +78,11 @@ animation_duration = 0.29
 
 These values are reloaded each time you enable mode.
 
+Notes on current slot layout behavior:
+- Slots are arranged in a horizontal row from left to right.
+- `slot_vertical_gap` is used as spacing between slot windows in that row.
+- Slot windows use `active_area_height` for their height.
+
 ## Notes
 
 - This is implemented with Accessibility APIs (`AXUIElement`) and Carbon hotkeys.

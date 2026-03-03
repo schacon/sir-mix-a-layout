@@ -1,0 +1,22 @@
+# sir-mix-a-layout runtime config
+# Read each time mode is enabled (Ctrl+Cmd+P).
+
+slot_vertical_gap = 40
+slot_top_offset = 150
+slot_left_offset = 40
+
+#active_left_offset = 549
+#active_top_offset = 56
+#active_area_width = 1920
+#active_area_height = 1080
+
+active_left_offset = 589
+active_top_offset = 96
+active_area_width = 1840
+active_area_height = 1000
+active_split_gap = 30
+
+animation_duration = 0.20
+
+control_panel_left_offset = 20
+control_panel_top_offset = 20
