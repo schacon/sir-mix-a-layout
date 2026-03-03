@@ -743,7 +743,6 @@ final class LayoutController {
     private var activeWidthMode: ActiveWidthMode = .half
     private var layoutConfig = LayoutRuntimeConfig()
 
-    private let ctrlCmdModifier: UInt32 = UInt32(controlKey | cmdKey)
     private let keybindings: [String]
 
     init() throws {
@@ -762,15 +761,16 @@ final class LayoutController {
         [
             "Ctrl+Cmd+P: Toggle layout mode on/off",
             "Ctrl+Cmd+I: Toggle active window width (half/full)",
-            "Ctrl+Cmd+B/N/M/, : Toggle slot 1..4 window in primary (left) active area",
-            "Ctrl+Cmd+H/J/K/L : Put slot 1..4 window in secondary (right) active area",
+            "F1..F12: Slot panel actions (slot 1..4: Full/Left Half/Right Half)",
+            "F13: Minimize All",
+            "F14: Swap",
             "Slot panel appears in management mode; use Full/Left/Right buttons per slot and Minimize All"
         ]
     }
 
     private func registerHotkeys() throws {
         try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_P), modifiers: ctrlCmdModifier)
+            KeyCombo(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(controlKey | cmdKey))
         ) { [weak self] in
             Task { @MainActor in
                 self?.toggleMode()
@@ -778,45 +778,69 @@ final class LayoutController {
         }
 
         try hotkeys.register(
-            KeyCombo(keyCode: UInt32(kVK_ANSI_I), modifiers: ctrlCmdModifier)
+            KeyCombo(keyCode: UInt32(kVK_ANSI_I), modifiers: UInt32(controlKey | cmdKey))
         ) { [weak self] in
             Task { @MainActor in
                 self?.toggleActiveWidthMode()
             }
         }
 
-        let slotActivationKeyCodes: [UInt32] = [
-            UInt32(kVK_ANSI_B),
-            UInt32(kVK_ANSI_N),
-            UInt32(kVK_ANSI_M),
-            UInt32(kVK_ANSI_Comma)
+        let panelActionKeyCodes: [UInt32] = [
+            UInt32(kVK_F1),
+            UInt32(kVK_F2),
+            UInt32(kVK_F3),
+            UInt32(kVK_F4),
+            UInt32(kVK_F5),
+            UInt32(kVK_F6),
+            UInt32(kVK_F7),
+            UInt32(kVK_F8),
+            UInt32(kVK_F9),
+            UInt32(kVK_F10),
+            UInt32(kVK_F11),
+            UInt32(kVK_F12),
+            UInt32(kVK_F13),
+            UInt32(kVK_F14)
         ]
 
-        for (index, keyCode) in slotActivationKeyCodes.enumerated() {
+        for (index, keyCode) in panelActionKeyCodes.enumerated() {
             try hotkeys.register(
-                KeyCombo(keyCode: keyCode, modifiers: ctrlCmdModifier)
+                KeyCombo(keyCode: keyCode, modifiers: 0)
             ) { [weak self] in
                 Task { @MainActor in
-                    self?.toggleSlot(index)
+                    self?.performPanelAction(for: index)
                 }
             }
         }
+    }
 
-        let secondarySlotKeyCodes: [UInt32] = [
-            UInt32(kVK_ANSI_H),
-            UInt32(kVK_ANSI_J),
-            UInt32(kVK_ANSI_K),
-            UInt32(kVK_ANSI_L)
-        ]
+    private func performPanelAction(for actionIndex: Int) {
+        guard actionIndex >= 0 else {
+            return
+        }
 
-        for (index, keyCode) in secondarySlotKeyCodes.enumerated() {
-            try hotkeys.register(
-                KeyCombo(keyCode: keyCode, modifiers: ctrlCmdModifier)
-            ) { [weak self] in
-                Task { @MainActor in
-                    self?.activateSecondarySlot(index)
-                }
+        if actionIndex < AppConfig.maxSlots * 3 {
+            let slotIndex = actionIndex / 3
+            let placementIndex = actionIndex % 3
+            let placement: SlotPanelController.Placement
+            switch placementIndex {
+            case 0:
+                placement = .full
+            case 1:
+                placement = .leftHalf
+            default:
+                placement = .rightHalf
             }
+            placeSlot(slotIndex, placement: placement)
+            return
+        }
+
+        if actionIndex == AppConfig.maxSlots * 3 {
+            minimizeAllToSlots()
+            return
+        }
+
+        if actionIndex == (AppConfig.maxSlots * 3 + 1) {
+            swapActiveWindows()
         }
     }
 
@@ -1387,15 +1411,15 @@ final class LayoutController {
     private func slotShortcutLabel(for index: Int) -> String {
         switch index {
         case 0:
-            return "Ctrl+Cmd+B/H"
+            return "F1/F2/F3"
         case 1:
-            return "Ctrl+Cmd+N/J"
+            return "F4/F5/F6"
         case 2:
-            return "Ctrl+Cmd+M/K"
+            return "F7/F8/F9"
         case 3:
-            return "Ctrl+Cmd+,/L"
+            return "F10/F11/F12"
         default:
-            return "Ctrl+Cmd+?"
+            return "F?"
         }
     }
 

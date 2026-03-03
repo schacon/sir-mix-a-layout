@@ -6,22 +6,16 @@ A lightweight macOS window manager utility with animated slot mode.
 
 - `Ctrl + Cmd + P`: Toggle mode.
 - `Ctrl + Cmd + I`: Toggle active window width between half and full (starts in half mode).
+- `F1..F14`: Mirror the 14 helper panel buttons:
+  - `F1/F2/F3`: Slot 1 `Full/Left Half/Right Half`
+  - `F4/F5/F6`: Slot 2 `Full/Left Half/Right Half`
+  - `F7/F8/F9`: Slot 3 `Full/Left Half/Right Half`
+  - `F10/F11/F12`: Slot 4 `Full/Left Half/Right Half`
+  - `F13`: `Minimize All`
+  - `F14`: `Swap`
 - Mode ON:
   - Only the first 4 visible windows are managed; all others are ignored.
-  - Those 4 windows are assigned to fixed slot keys:
-    - `Ctrl + Cmd + B` -> slot 1
-    - `Ctrl + Cmd + N` -> slot 2
-    - `Ctrl + Cmd + M` -> slot 3
-    - `Ctrl + Cmd + ,` -> slot 4
-    - `Ctrl + Cmd + H/J/K/L` target slots `1/2/3/4` for the right-side active pane
-  - Pressing a slot key:
-    - If that slot is inactive, it brings that window to the active area.
-    - If that same slot is already active, it minimizes it back to its slot.
-    - If a different slot is active, it switches the active window to the new slot.
-  - Pressing `Ctrl + Cmd + H/J/K/L`:
-    - Keeps the current active window in place (left pane in half mode).
-    - Moves the selected slot window into the right pane.
-    - If width mode is full, it automatically switches to half mode first.
+  - F-key actions are equivalent to clicking the helper panel buttons.
   - Slots are `300x300`.
   - Slot 1 starts `50px` from the top, and each next slot is `400px` lower (`300 + 100 gap`).
   - Slot placement is top-right anchored, so windows that refuse to shrink overflow to the left.
