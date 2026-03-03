@@ -446,6 +446,16 @@ final class AXWindowService {
 }
 
 final class WindowAnimator {
+    private final class AnimationCallbacks: @unchecked Sendable {
+        let apply: (AXUIElement, CGRect) -> Void
+        let completion: (() -> Void)?
+
+        init(apply: @escaping (AXUIElement, CGRect) -> Void, completion: (() -> Void)?) {
+            self.apply = apply
+            self.completion = completion
+        }
+    }
+
     func animate(window: AXUIElement, from start: CGRect, to end: CGRect, duration: TimeInterval, apply: @escaping (AXUIElement, CGRect) -> Void, completion: (() -> Void)? = nil) {
         guard duration > 0 else {
             apply(window, end)
@@ -454,6 +464,7 @@ final class WindowAnimator {
         }
 
         let startTime = CACurrentMediaTime()
+        let callbacks = AnimationCallbacks(apply: apply, completion: completion)
 
         var timer: Timer?
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
@@ -461,11 +472,11 @@ final class WindowAnimator {
             let t = min(1.0, elapsed / duration)
             let eased = t * t * (3 - (2 * t))
             let frame = Self.interpolate(from: start, to: end, progress: eased)
-            apply(window, frame)
+            callbacks.apply(window, frame)
 
             if t >= 1.0 {
                 timer.invalidate()
-                completion?()
+                callbacks.completion?()
             }
         }
 
@@ -502,6 +513,7 @@ final class SlotPanelController: NSObject {
         let index: Int
         let shortcut: String
         let icon: NSImage?
+        let hasWindow: Bool
         let enabled: Bool
         let activePlacement: Placement?
     }
@@ -510,17 +522,31 @@ final class SlotPanelController: NSObject {
     private let stackView = NSStackView()
     private let minimizeAllButton = NSButton(title: "Minimize All", target: nil, action: nil)
     private let swapButton = NSButton(title: "Swap", target: nil, action: nil)
+    private let reorderButton = NSButton(title: "Reorder", target: nil, action: nil)
     private var shortcutLabels: [NSTextField] = []
     private var iconViews: [NSImageView] = []
     private var rowButtons: [[NSButton]] = []
+    private var rowReorderButtons: [[NSButton]] = []
+    private var reorderMode = false
+    private var currentItems: [Item] = []
+    private var currentCanMinimizeAll = false
+    private var currentCanSwap = false
     private let onSelect: (Int, Placement) -> Void
     private let onMinimizeAll: () -> Void
     private let onSwap: () -> Void
+    private let onReorderMove: (Int, Int) -> Void
 
-    init(slotCount: Int, onSelect: @escaping (Int, Placement) -> Void, onMinimizeAll: @escaping () -> Void, onSwap: @escaping () -> Void) {
+    init(
+        slotCount: Int,
+        onSelect: @escaping (Int, Placement) -> Void,
+        onMinimizeAll: @escaping () -> Void,
+        onSwap: @escaping () -> Void,
+        onReorderMove: @escaping (Int, Int) -> Void
+    ) {
         self.onSelect = onSelect
         self.onMinimizeAll = onMinimizeAll
         self.onSwap = onSwap
+        self.onReorderMove = onReorderMove
         self.window = NSWindow(
             contentRect: NSRect(x: 80, y: 80, width: 100, height: 100),
             styleMask: [.titled, .closable, .utilityWindow],
@@ -560,6 +586,11 @@ final class SlotPanelController: NSObject {
         swapButton.action = #selector(swapPressed)
         swapButton.bezelStyle = .rounded
         swapButton.setContentHuggingPriority(.required, for: .horizontal)
+        reorderButton.target = self
+        reorderButton.action = #selector(reorderPressed(_:))
+        reorderButton.bezelStyle = .rounded
+        reorderButton.setButtonType(.pushOnPushOff)
+        reorderButton.setContentHuggingPriority(.required, for: .horizontal)
         let controlsRow = NSStackView()
         controlsRow.orientation = .horizontal
         controlsRow.alignment = .centerY
@@ -567,6 +598,7 @@ final class SlotPanelController: NSObject {
         controlsRow.spacing = 6
         controlsRow.addArrangedSubview(minimizeAllButton)
         controlsRow.addArrangedSubview(swapButton)
+        controlsRow.addArrangedSubview(reorderButton)
         stackView.addArrangedSubview(controlsRow)
 
         for index in 0..<slotCount {
@@ -595,12 +627,18 @@ final class SlotPanelController: NSObject {
             row.addArrangedSubview(leftButton)
             row.addArrangedSubview(rightButton)
 
+            let upButton = makeReorderButton(title: "Up", index: index, direction: -1)
+            let downButton = makeReorderButton(title: "Down", index: index, direction: 1)
+            row.addArrangedSubview(upButton)
+            row.addArrangedSubview(downButton)
+
             let shortcutLabel = NSTextField(labelWithString: "")
             shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
             row.addArrangedSubview(shortcutLabel)
             shortcutLabels.append(shortcutLabel)
 
             rowButtons.append([fullButton, leftButton, rightButton])
+            rowReorderButtons.append([upButton, downButton])
             stackView.addArrangedSubview(row)
         }
 
@@ -624,8 +662,23 @@ final class SlotPanelController: NSObject {
     }
 
     func update(items: [Item], canMinimizeAll: Bool, canSwap: Bool) {
-        minimizeAllButton.isEnabled = canMinimizeAll
-        swapButton.isEnabled = canSwap
+        currentItems = items
+        currentCanMinimizeAll = canMinimizeAll
+        currentCanSwap = canSwap
+        render()
+    }
+
+    private func render() {
+        minimizeAllButton.isEnabled = currentCanMinimizeAll
+        swapButton.isEnabled = currentCanSwap
+
+        let hasWindows = currentItems.contains { $0.enabled && $0.hasWindow }
+        reorderButton.isEnabled = hasWindows
+        if !hasWindows {
+            reorderMode = false
+        }
+        reorderButton.state = reorderMode ? .on : .off
+
         for index in 0..<shortcutLabels.count {
             shortcutLabels[index].stringValue = "Slot \(index + 1)"
             iconViews[index].image = nil
@@ -633,14 +686,23 @@ final class SlotPanelController: NSObject {
                 button.isEnabled = false
                 button.state = .off
             }
+            for button in rowReorderButtons[index] {
+                button.isHidden = !reorderMode
+                button.isEnabled = false
+            }
         }
 
-        for item in items where item.index >= 0 && item.index < shortcutLabels.count {
+        for item in currentItems where item.index >= 0 && item.index < shortcutLabels.count {
             shortcutLabels[item.index].stringValue = item.shortcut
             iconViews[item.index].image = item.icon
             for (buttonIndex, button) in rowButtons[item.index].enumerated() {
                 button.isEnabled = item.enabled
                 button.state = item.activePlacement?.rawValue == buttonIndex ? .on : .off
+            }
+            let reorderEnabled = item.enabled && item.hasWindow && reorderMode
+            for button in rowReorderButtons[item.index] {
+                button.isHidden = !reorderMode
+                button.isEnabled = reorderEnabled
             }
         }
 
@@ -653,6 +715,16 @@ final class SlotPanelController: NSObject {
         button.setButtonType(.pushOnPushOff)
         button.bezelStyle = .rounded
         button.setContentHuggingPriority(.required, for: .horizontal)
+        return button
+    }
+
+    private func makeReorderButton(title: String, index: Int, direction: Int) -> NSButton {
+        let button = NSButton(title: title, target: self, action: #selector(reorderMovePressed(_:)))
+        let directionCode = direction < 0 ? 0 : 1
+        button.tag = (index * 10) + directionCode
+        button.bezelStyle = .rounded
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.isHidden = true
         return button
     }
 
@@ -671,6 +743,18 @@ final class SlotPanelController: NSObject {
 
     @objc private func swapPressed() {
         onSwap()
+    }
+
+    @objc private func reorderPressed(_ sender: NSButton) {
+        reorderMode = sender.state == .on
+        render()
+    }
+
+    @objc private func reorderMovePressed(_ sender: NSButton) {
+        let index = sender.tag / 10
+        let directionCode = sender.tag % 10
+        let direction = directionCode == 0 ? -1 : 1
+        onReorderMove(index, direction)
     }
 
     private func resizeToFit() {
@@ -724,13 +808,21 @@ final class LayoutController {
 
     private let hotkeys: HotkeyManager
     private lazy var slotPanel: SlotPanelController = {
-        SlotPanelController(slotCount: AppConfig.maxSlots, onSelect: { [weak self] index, placement in
-            self?.placeSlot(index, placement: placement)
-        }, onMinimizeAll: { [weak self] in
-            self?.minimizeAllToSlots()
-        }, onSwap: { [weak self] in
-            self?.swapActiveWindows()
-        })
+        SlotPanelController(
+            slotCount: AppConfig.maxSlots,
+            onSelect: { [weak self] index, placement in
+                self?.placeSlot(index, placement: placement)
+            },
+            onMinimizeAll: { [weak self] in
+                self?.minimizeAllToSlots()
+            },
+            onSwap: { [weak self] in
+                self?.swapActiveWindows()
+            },
+            onReorderMove: { [weak self] index, direction in
+                self?.moveSlotAssignment(at: index, direction: direction)
+            }
+        )
     }()
     private let ax = AXWindowService()
     private let animator = WindowAnimator()
@@ -1339,6 +1431,48 @@ final class LayoutController {
         refreshSlotPanel()
     }
 
+    private func moveSlotAssignment(at index: Int, direction: Int) {
+        guard modeEnabled,
+              index >= 0,
+              index < slotWindowIDs.count,
+              slotWindowIDs.count > 1 else {
+            return
+        }
+
+        let count = slotWindowIDs.count
+        let step = direction < 0 ? -1 : 1
+        let target = (index + step + count) % count
+        guard target != index else {
+            return
+        }
+
+        slotWindowIDs.swapAt(index, target)
+
+        if activeSlotIndex == index {
+            activeSlotIndex = target
+        } else if activeSlotIndex == target {
+            activeSlotIndex = index
+        }
+
+        if secondarySlotIndex == index {
+            secondarySlotIndex = target
+        } else if secondarySlotIndex == target {
+            secondarySlotIndex = index
+        }
+
+        for (slotIndex, maybeWindowID) in slotWindowIDs.enumerated() {
+            guard let windowID = maybeWindowID,
+                  let state = managedWindows[windowID],
+                  state.slotIndex != nil else {
+                continue
+            }
+            state.slotIndex = slotIndex
+        }
+
+        refreshSlotPanel()
+        print(slotAssignmentsText())
+    }
+
     private func bringWindowForward(_ window: AXUIElement) {
         _ = ax.setMinimized(window, false)
         let pid = ax.pid(of: window)
@@ -1371,14 +1505,17 @@ final class LayoutController {
             let shortcut = slotShortcutLabel(for: index)
             let icon: NSImage?
             let enabled: Bool
+            let hasWindow: Bool
             let activePlacement = currentPlacement(for: index)
             if index < slotWindowIDs.count,
                let windowID = slotWindowIDs[index],
                let state = managedWindows[windowID] {
                 icon = ax.appIcon(of: state.window)
+                hasWindow = true
                 enabled = modeEnabled
             } else {
                 icon = nil
+                hasWindow = false
                 enabled = false
             }
 
@@ -1387,6 +1524,7 @@ final class LayoutController {
                     index: index,
                     shortcut: shortcut,
                     icon: icon,
+                    hasWindow: hasWindow,
                     enabled: enabled,
                     activePlacement: activePlacement
                 )
